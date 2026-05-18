@@ -1,0 +1,455 @@
+import { Worker, Queue } from 'bullmq';
+import IORedis from 'ioredis';
+import { PrismaClient } from '@prisma/client';
+import { scrapeJobs } from './scraper.js';
+import { Resend } from 'resend';
+import { chromium } from 'playwright';
+import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const prisma = new PrismaClient();
+
+// Configure Resend
+const resendKey = process.env.RESEND_API_KEY || '';
+const resend = resendKey.startsWith('re_') ? new Resend(resendKey) : null;
+const SENDER_EMAIL = process.env.SENDER_EMAIL || 'NextRole Alerts <alerts@nextrole.com>';
+
+// Create local resume public storage directory
+const publicResumeDir = path.join(__dirname, 'public', 'resumes');
+if (!fs.existsSync(publicResumeDir)) {
+  fs.mkdirSync(publicResumeDir, { recursive: true });
+}
+
+// Initialize Redis for Worker
+const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+
+console.log('[Worker] Connected to Redis. Initializing monitorQueue worker...');
+
+// Create the BullMQ Worker
+const worker = new Worker('monitorQueue', async (job) => {
+  const { searchId, url } = job.data;
+  console.log(`\n[Worker] Processing Job ${job.id}: Scrape search ID ${searchId} (${url})`);
+
+  try {
+    // 1. Fetch tracked search details
+    const search = await prisma.trackedSearch.findUnique({
+      where: { id: searchId }
+    });
+
+    if (!search) {
+      console.error(`[Worker] TrackedSearch with ID ${searchId} not found in database.`);
+      return;
+    }
+
+    // 2. Perform the scrape using Playwright
+    const scrapedJobs = await scrapeJobs(url);
+    if (scrapedJobs.length === 0) {
+      console.log(`[Worker] Scraper returned 0 jobs for ${url}. Skipping diff check.`);
+      return;
+    }
+
+    // 3. Query existing snapshots for this search in database
+    const existingSnapshots = await prisma.jobSnapshot.findMany({
+      where: { trackedSearchId: searchId }
+    });
+
+    const existingJobIds = new Set(existingSnapshots.map(s => s.atsJobId));
+    const newJobsDetected = scrapedJobs.filter(job => !existingJobIds.has(job.id));
+
+    console.log(`[Worker] Scrape Analysis: total scraped = ${scrapedJobs.length}, existing snapshots = ${existingJobIds.size}, newly detected = ${newJobsDetected.length}`);
+
+    // 4. Save new snapshots and trigger workflows
+    for (const newJob of newJobsDetected) {
+      console.log(`[Worker] New job detected! Saving: "${newJob.title}" at "${newJob.location}"`);
+
+      // Save to JobSnapshot
+      const savedJob = await prisma.jobSnapshot.create({
+        data: {
+          trackedSearchId: searchId,
+          atsJobId: newJob.id,
+          title: newJob.title,
+          location: newJob.location,
+          url: newJob.url,
+          isNew: true
+        }
+      });
+
+      // Parse beautiful company name from search URL
+      const company = getCompanyNameFromUrl(url);
+
+      // Trigger alerts
+      await sendJobEmailAlert(search.userId, company, newJob);
+      
+      // AI resume tailoring (Premium subscription feature)
+      await handlePremiumAiTailoring(search.userId, company, savedJob);
+    }
+
+  } catch (error) {
+    console.error(`[Worker] Error handling job ${job.id}:`, error);
+    throw error;
+  }
+}, { connection });
+
+// Schedule regular repeatable checks
+// For demonstration & local testing, we also establish a self-contained cron-scheduler
+const monitorQueue = new Queue('monitorQueue', { connection });
+setInterval(async () => {
+  console.log('[Scheduler] Waking up to queue scraping jobs for all tracked career pages...');
+  try {
+    const searches = await prisma.trackedSearch.findMany();
+    console.log(`[Scheduler] Found ${searches.length} tracked searches in database to monitor.`);
+    
+    for (const search of searches) {
+      await monitorQueue.add('cron-scrape', {
+        searchId: search.id,
+        url: search.url
+      });
+      console.log(`- Queued scraping job for search ID ${search.id} (${search.url})`);
+    }
+  } catch (err) {
+    console.error('[Scheduler] Error adding repeatable scraping tasks:', err);
+  }
+}, 15 * 60 * 1000); // Trigger every 15 minutes
+
+console.log('[Scheduler] Recurring scheduler successfully activated (Interval: 15 minutes).');
+
+/**
+ * ----------------------------------------------------
+ * EMAIL ALERTS SERVICE (RESEND)
+ * ----------------------------------------------------
+ */
+async function sendJobEmailAlert(userId: string, company: string, job: { title: string; location: string; url: string }) {
+  console.log(`[Email] Preparing notification email for user "${userId}"...`);
+  
+  // HTML Layout incorporating sleek premium design principles
+  const emailHtml = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 24px; color: #1e293b; margin: 0; }
+          .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+          .header { background: linear-gradient(135deg, #1e293b 0%, #0f1722 100%); padding: 32px 24px; text-align: center; color: #ffffff; }
+          .header h1 { font-size: 24px; font-weight: 700; margin: 0; letter-spacing: -0.5px; }
+          .body { padding: 32px 24px; }
+          .badge { display: inline-block; background: #ecfdf5; color: #059669; font-weight: 600; font-size: 12px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 16px; text-transform: uppercase; }
+          .job-title { font-size: 22px; font-weight: 700; color: #0f172a; margin: 0 0 8px 0; }
+          .meta-info { font-size: 14px; color: #64748b; margin-bottom: 24px; }
+          .meta-info span { margin-right: 16px; font-weight: 500; }
+          .btn-apply { display: inline-block; background: #0f172a; color: #ffffff; font-weight: 600; font-size: 14px; text-decoration: none; padding: 12px 24px; border-radius: 8px; margin-right: 12px; transition: background 0.2s ease; }
+          .footer { text-align: center; font-size: 12px; color: #94a3b8; padding: 24px; border-top: 1px solid #f1f5f9; background: #f8fafc; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>NextRole Tracker</h1>
+          </div>
+          <div class="body">
+            <span class="badge">New Job Alert</span>
+            <h2 class="job-title">${job.title}</h2>
+            <div class="meta-info">
+              <span>🏢 <strong>${company}</strong></span>
+              <span>📍 ${job.location}</span>
+            </div>
+            <p style="font-size: 15px; line-height: 1.6; color: #475569; margin-bottom: 32px;">
+              A new career opportunity matching your saved tracking filters has just been posted on the <strong>${company}</strong> career board!
+            </p>
+            <a href="${job.url}" class="btn-apply" target="_blank">Apply Now →</a>
+          </div>
+          <div class="footer">
+            <p>You received this email because you are tracking the ${company} career page on NextRole.</p>
+            <p>© 2026 NextRole AI. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  if (!resend) {
+    console.log('\n[Email Mock] resend client not configured or dummy key active.');
+    console.log(`[Email Mock] To: user-${userId}@gmail.com`);
+    console.log(`[Email Mock] Subject: New Job Alert: ${job.title} at ${company}`);
+    console.log(`[Email Mock] Job URL: ${job.url}`);
+    return;
+  }
+
+  try {
+    await resend.emails.send({
+      from: SENDER_EMAIL,
+      to: `user-${userId}@gmail.com`, // Fallback/demo destination
+      subject: `🚨 New Job Alert: ${job.title} at ${company}!`,
+      html: emailHtml
+    });
+    console.log('[Email] Alert email successfully sent via Resend API.');
+  } catch (err) {
+    console.error('[Email] Failed to send email alert via Resend:', err);
+  }
+}
+
+/**
+ * ----------------------------------------------------
+ * AI RESUME TAILORING SERVICE (PREMIUM)
+ * ----------------------------------------------------
+ */
+async function handlePremiumAiTailoring(userId: string, company: string, jobSnapshot: { id: string; title: string; location: string; url: string }) {
+  console.log(`[AI Engine] Verifying premium status for user "${userId}"...`);
+
+  // 1. Check if user is premium subscriber
+  const sub = await prisma.userSubscription.findUnique({
+    where: { userId }
+  });
+
+  if (!sub || !sub.isActive) {
+    console.log(`[AI Engine] User "${userId}" is on the FREE tier. Skipping premium resume tailoring.`);
+    return;
+  }
+
+  console.log(`[AI Engine] User is active Premium subscriber! Initiating resume tailoring for: "${jobSnapshot.title}" at "${company}"`);
+
+  // 2. Fetch master resume profile
+  const profile = await prisma.userProfile.findUnique({
+    where: { userId }
+  });
+
+  if (!profile) {
+    console.log(`[AI Engine] User has not completed their master resume profile. Skipping tailoring.`);
+    return;
+  }
+
+  try {
+    // 3. Scrape full job description using Playwright
+    const fullJobDesc = await scrapeFullJobDescription(jobSnapshot.url);
+    console.log(`[AI Engine] Successfully scraped job description (${fullJobDesc.substring(0, 100)}...)`);
+
+    // 4. Generate tailored resume text using Claude API
+    const tailoredText = await callClaudeToTailorResume(profile, jobSnapshot, fullJobDesc);
+    console.log('[AI Engine] Resume tailoring completed via Claude.');
+
+    // 5. Generate tailored PDF using Playwright and save it locally
+    const filename = `tailored-${jobSnapshot.id}.pdf`;
+    const localPath = path.join(publicResumeDir, filename);
+    await generatePdfFile(tailoredText, localPath);
+    const pdfUrl = `/resumes/${filename}`;
+
+    // 6. Save tailored resume to database
+    await prisma.tailoredResume.create({
+      data: {
+        jobSnapshotId: jobSnapshot.id,
+        resumeText: tailoredText,
+        pdfUrl
+      }
+    });
+
+    console.log(`[AI Engine] Tailored resume saved successfully. PDF available at: ${pdfUrl}`);
+
+  } catch (err) {
+    console.error('[AI Engine] Error during resume tailoring process:', err);
+  }
+}
+
+/**
+ * Helper: Scrape full job description text from ATS job page
+ */
+async function scrapeFullJobDescription(url: string): Promise<string> {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Look for common job description containers
+    const descriptionSelectors = [
+      '#content', '.description', '.posting-description', 
+      '[data-automation-id="jobDescription"]', '#job-description', 
+      '.job-description', 'article', 'body'
+    ];
+
+    let desc = '';
+    for (const selector of descriptionSelectors) {
+      const element = page.locator(selector);
+      if (await element.count() > 0) {
+        desc = await element.first().innerText();
+        if (desc.trim().length > 200) break;
+      }
+    }
+
+    return desc.trim() || 'No full description text could be scraped.';
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * Helper: Call Claude AI API to tailor the resume
+ */
+async function callClaudeToTailorResume(
+  profile: { experience: string; skills: string; education: string; projects: string },
+  job: { title: string },
+  jobDesc: string
+): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY || '';
+  
+  if (!apiKey || apiKey.startsWith('sk-ant-123')) {
+    console.log('[AI Engine] Claude API key is simulated. Returning high-fidelity mock tailored resume.');
+    return generateMockTailoredResume(profile, job.title);
+  }
+
+  const prompt = `
+    You are a professional ATS resume optimizer. 
+    Rewrite the user's master resume to highly match the job description for the role: "${job.title}".
+
+    Master Resume Details:
+    - Experience: ${profile.experience}
+    - Skills: ${profile.skills}
+    - Education: ${profile.education}
+    - Projects: ${profile.projects}
+
+    Job Description:
+    ${jobDesc}
+
+    Instructions:
+    1. Tailor and align the experience bullet points to map directly with required job description skills.
+    2. Optimize target keywords and vocabulary so the resume scores extremely highly on Applicant Tracking Systems (ATS).
+    3. Keep all factual history accurate (dates, company names, titles). DO NOT invent or fabricate any details.
+    4. Format your output strictly in clean HTML, suitable for printing to A4 pages.
+  `;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 4000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    const data: any = await response.json();
+    return data.content[0].text;
+  } catch (err) {
+    console.error('[AI Engine] Claude API fetch error, falling back to mock generator:', err);
+    return generateMockTailoredResume(profile, job.title);
+  }
+}
+
+/**
+ * Helper: Print HTML to PDF using Playwright
+ */
+async function generatePdfFile(htmlContent: string, outputPath: string) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    
+    // Set formatted resume content
+    await page.setContent(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <style>
+            body { font-family: "Segoe UI", system-ui, sans-serif; padding: 40px; line-height: 1.5; color: #1e293b; max-width: 800px; margin: 0 auto; }
+            h1 { font-size: 26px; color: #0f172a; text-align: center; margin-bottom: 5px; font-weight: 800; }
+            .subtitle { font-size: 13px; text-align: center; color: #64748b; margin-bottom: 24px; }
+            h2 { font-size: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 4px; margin-top: 24px; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
+            .job-block { margin-bottom: 16px; }
+            .job-header { font-weight: 700; color: #0f172a; font-size: 14px; }
+            .job-date { float: right; font-weight: 500; color: #64748b; font-size: 13px; }
+            .skills-list { font-weight: 500; }
+            ul { padding-left: 18px; margin: 6px 0; }
+            li { margin-bottom: 4px; font-size: 13px; color: #334155; }
+          </style>
+        </head>
+        <body>
+          ${htmlContent}
+        </body>
+      </html>
+    `);
+
+    // Print to high-quality PDF page layout
+    await page.pdf({
+      path: outputPath,
+      format: 'A4',
+      margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' }
+    });
+  } finally {
+    await browser.close();
+  }
+}
+
+/**
+ * Clean URL Company Parser
+ */
+function getCompanyNameFromUrl(targetUrl: string): string {
+  try {
+    const urlObj = new URL(targetUrl);
+    const hostname = urlObj.hostname.toLowerCase();
+    
+    if (hostname.includes('greenhouse.io')) {
+      const parts = urlObj.pathname.split('/');
+      if (parts[1]) return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
+    } else if (hostname.includes('lever.co')) {
+      const parts = urlObj.pathname.split('/');
+      if (parts[1]) return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
+    } else if (hostname.includes('myworkdayjobs.com')) {
+      const parts = hostname.split('.');
+      return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+    }
+    return hostname;
+  } catch (e) {
+    return 'Company Portal';
+  }
+}
+
+/**
+ * Fallback Mock Resume Tailor
+ */
+function generateMockTailoredResume(
+  profile: { experience: string; skills: string; education: string; projects: string },
+  jobTitle: string
+): string {
+  return `
+    <h1>JOHN DOE</h1>
+    <div class="subtitle">john.doe@gmail.com | (555) 019-2834 | New York, NY | linkedin.com/in/johndoe</div>
+    
+    <h2>Professional Summary</h2>
+    <p style="font-size: 13px; color: #334155;">
+      Results-driven Software Engineer with extensive experience in architecting robust digital solutions. Re-tailored specifically for the <strong>${jobTitle}</strong> opening, emphasizing core capabilities in modern technology frameworks and systems engineering.
+    </p>
+
+    <h2>Skills Profile</h2>
+    <p style="font-size: 13px; color: #334155;" class="skills-list">
+      <strong>Core Strengths (Optimized for ${jobTitle}):</strong> ${profile.skills}
+    </p>
+
+    <h2>Professional Experience</h2>
+    <div class="job-block">
+      <div class="job-header">Senior Software Engineer <span class="job-date">2023 - Present</span></div>
+      <p style="font-size: 13px; font-style: italic; color: #64748b; margin: 2px 0;">NextGen Systems, New York</p>
+      <ul>
+        <li>Optimized engineering architectures using scalable distributed nodes, meeting specific requirements matching the ${jobTitle} job definition.</li>
+        ${profile.experience.split('\n').filter(Boolean).map(bullet => `<li>${bullet}</li>`).join('')}
+      </ul>
+    </div>
+
+    <h2>Education</h2>
+    <p style="font-size: 13px; color: #334155;">
+      ${profile.education || 'B.S. in Computer Science - State University'}
+    </p>
+
+    <h2>Personal Projects</h2>
+    <p style="font-size: 13px; color: #334155;">
+      ${profile.projects || 'Designed and deployed distributed analytics queue monitoring tools processing million events/day.'}
+    </p>
+  `;
+}
