@@ -7,6 +7,29 @@ export default defineBackground(() => {
   // Poll interval (every 30 seconds for immediate responsiveness in local testing)
   const POLL_INTERVAL = 30 * 1000;
   
+  const CAREER_KEYWORDS = ["jobs", "careers", "positions", "postings", "openings", "join-us"];
+
+  // Global Route Discovery Listener (High Efficiency)
+  browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    // Wait until the page layout is fully mounted
+    if (changeInfo.status === 'complete' && tab.url) {
+      const url = new URL(tab.url.toLowerCase());
+      
+      // Check path or subdomains against career indicators
+      const isMatch = CAREER_KEYWORDS.some(keyword => url.pathname.includes(keyword)) ||
+                      url.hostname.includes("lever.co") || 
+                      url.hostname.includes("greenhouse.io") ||
+                      url.hostname.includes("workdayjobs.com") ||
+                      url.hostname.includes("linkedin.com/jobs") ||
+                      url.hostname.includes("wellfound.com/jobs");
+
+      if (isMatch) {
+        // Ping content.ts to run deep DOM pattern evaluation and wake up the side panel HUD
+        browser.tabs.sendMessage(tabId, { action: "SCAN_ACTIVE_PORTAL" }).catch(() => {});
+      }
+    }
+  });
+
   // Helper to fetch user ID
   async function getUserId(): Promise<string> {
     try {

@@ -38,6 +38,16 @@ export default defineContentScript({
         handleDetection();
       }
     });
+
+    // Also listen for background navigation pings from background.ts
+    browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request.action === 'SCAN_ACTIVE_PORTAL') {
+        console.log('[NextRole] Received background ping: Scanning portal...');
+        handleDetection();
+        sendResponse({ success: true });
+      }
+    });
+
   },
 });
 
@@ -150,25 +160,81 @@ async function handleDetection(retryCount = 0) {
   }
 }
 
+function runUniversalHeuristicScan() {
+  let matches: any[] = [];
+  let companyName = '';
+  
+  // Strategy A: Parse Google Job Posting Standard Structs (Universal JSON-LD)
+  const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+  jsonLdScripts.forEach(script => {
+    try {
+      // Some scripts contain arrays of JSON objects
+      let rawData = JSON.parse(script.textContent || '');
+      const dataArray = Array.isArray(rawData) ? rawData : [rawData];
+      
+      dataArray.forEach(data => {
+        if (data['@type'] === 'JobPosting' || (data['@graph'] && data['@graph'].some((g: any) => g['@type'] === 'JobPosting'))) {
+          const targetNode = data['@type'] === 'JobPosting' ? data : data['@graph'].find((g: any) => g['@type'] === 'JobPosting');
+          matches.push({
+            title: targetNode.title || targetNode.name,
+            company: targetNode.hiringOrganization?.name
+          });
+          if (targetNode.hiringOrganization?.name) {
+            companyName = targetNode.hiringOrganization.name;
+          }
+        }
+      });
+    } catch (e) { /* Safe catch for malformed scripts */ }
+  });
+
+  // Strategy B: Fallback to common target list anchors if no metadata script exists
+  if (matches.length === 0) {
+    const criticalSelectors = ['a[href*="/job/"]', 'a[href*="/career/"]', 'a[href*="/position/"]', '[class*="job-title"]', 'h1'];
+    criticalSelectors.forEach(selector => {
+      document.querySelectorAll(selector).forEach(element => {
+        const text = element.textContent?.trim() || '';
+        if (text.length > 4 && text.length < 80) {
+          matches.push({ title: text, rawElement: element });
+        }
+      });
+    });
+  }
+
+  return {
+    isMatchFound: matches.length > 0,
+    matches: matches,
+    companyName: companyName
+  };
+}
+
 function detectCareerPage(): boolean {
   const url = window.location.href.toLowerCase();
 
-  // 1. Hardcoded check for the 3 target platforms
+  // 1. High-Fidelity JSON-LD Metadata Check
+  const telemetry = runUniversalHeuristicScan();
+  if (telemetry.isMatchFound && telemetry.companyName) {
+    return true; // Absolute certainty it's a job portal
+  }
+
+  // 2. Hardcoded check for the 3 target platforms
   if (
     url.includes('myworkdayjobs.com') ||
     url.includes('boards.greenhouse.io') ||
-    url.includes('jobs.lever.co')
+    url.includes('jobs.lever.co') ||
+    url.includes('linkedin.com/jobs') ||
+    url.includes('wellfound.com/jobs')
   ) {
     return true;
   }
 
-  // 2. Common career portal sub-paths in URL (LinkedIn jobs, /careers dashboards, etc)
+  // 3. Common career portal sub-paths in URL
   if (
     url.includes('/careers') ||
     url.includes('/jobs') ||
-    url.includes('/careers/') ||
-    url.includes('/join-us') ||
-    url.includes('/careers-at')
+    url.includes('/positions') ||
+    url.includes('/postings') ||
+    url.includes('/openings') ||
+    url.includes('/join-us')
   ) {
     return true;
   }
@@ -213,6 +279,13 @@ function detectCareerPage(): boolean {
 }
 
 function getCompanyName(): string {
+  // 1. Prioritize structural JSON-LD metadata if available
+  const telemetry = runUniversalHeuristicScan();
+  if (telemetry.companyName) {
+    return telemetry.companyName;
+  }
+
+  // 2. Fallback to URL parsers
   const url = new URL(window.location.href);
   const hostname = url.hostname.toLowerCase();
   
@@ -233,7 +306,7 @@ function getCompanyName(): string {
     }
   }
   
-  // Clean up title as fallback
+  // 3. Clean up title as final fallback
   let title = document.title;
   if (title) {
     title = title.replace(/(careers|jobs|openings|positions|hiring|work with us|opportunities|job board)/gi, '').trim();

@@ -6,6 +6,6 @@ export default defineConfig({
   manifest: {
     name: 'NextRole',
     description: 'NextRole - AI-powered Cybersecurity Careers Co-pilot',
-    permissions: ['storage', 'notifications', 'alarms'],
+    permissions: ['storage', 'notifications', 'alarms', 'tabs'],
   }
 });
