@@ -1,5 +1,5 @@
 import { Worker, Queue } from 'bullmq';
-import IORedis from 'ioredis';
+import { Redis } from 'ioredis';
 import { PrismaClient } from '@prisma/client';
 import { scrapeJobs } from './scraper.js';
 import { Resend } from 'resend';
@@ -27,7 +27,7 @@ if (!fs.existsSync(publicResumeDir)) {
 
 // Initialize Redis for Worker
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
 
 console.log('[Worker] Connected to Redis. Initializing monitorQueue worker...');
 

@@ -84,10 +84,63 @@ export default defineBackground(() => {
     }
   });
 
+  // Active monitor config (synced from popup)
+  let monitorConfig: any = null;
+  let alertsEnabled = true;
+
+  // ── Keyword matching helper ────────────────────────────
+  function jobMatchesConfig(job: any, cfg: any): boolean {
+    if (!cfg || cfg.mode === 'all') return true;
+    const haystack = `${job.title ?? ''} ${job.description ?? ''}`.toLowerCase();
+    const locationStr = (job.location ?? '').toLowerCase();
+
+    const roleMatch = cfg.roles.length === 0 || cfg.roles.some((r: string) => haystack.includes(r.toLowerCase()));
+    const stackMatch = cfg.stack.length === 0 || cfg.stack.some((s: string) => haystack.includes(s.toLowerCase()));
+
+    let locationMatch = true;
+    if (cfg.location && cfg.location !== 'anywhere') {
+      const locMap: Record<string, string[]> = {
+        'anywhere-india': ['india', 'in'],
+        'remote': ['remote', 'anywhere', 'worldwide'],
+        'bangalore': ['bangalore', 'bengaluru'],
+        'mumbai': ['mumbai', 'bombay'],
+        'delhi': ['delhi', 'ncr', 'gurgaon', 'noida'],
+        'hyderabad': ['hyderabad'],
+        'pune': ['pune'],
+        'us-remote': ['remote', 'us', 'united states'],
+      };
+      const terms = locMap[cfg.location] ?? [cfg.location];
+      locationMatch = terms.some(t => locationStr.includes(t));
+    }
+
+    return roleMatch && stackMatch && locationMatch;
+  }
+
   // Listen for message requests from content/popup scripts
   browser.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
     if (message.action === 'openTab' && message.url) {
       browser.tabs.create({ url: message.url });
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'startMonitor') {
+      monitorConfig = message.config;
+      alertsEnabled = message.config.instantAlerts ?? true;
+      console.log('[Background] Monitor started with config:', monitorConfig);
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'stopMonitor') {
+      monitorConfig = null;
+      console.log('[Background] Monitor stopped.');
+      sendResponse({ success: true });
+      return true;
+    }
+
+    if (message.action === 'setAlerts') {
+      alertsEnabled = message.enabled;
       sendResponse({ success: true });
       return true;
     }
@@ -102,20 +155,47 @@ export default defineBackground(() => {
       .then(async (res) => {
         const text = await res.text();
         let data = null;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          data = text;
-        }
+        try { data = JSON.parse(text); } catch { data = text; }
         sendResponse({ success: res.ok, status: res.status, data });
       })
       .catch((err) => {
         console.warn(`[Background] Fetch to ${url} failed:`, err);
         sendResponse({ success: false, error: err.message });
       });
-      return true; // Keep message channel open for asynchronous sendResponse
+      return true;
     }
   });
+
+  // Override pollForNewJobs to respect keyword config
+  const _origPoll = pollForNewJobs;
+  (globalThis as any).__nrPollOverride = async function() {
+    const userId = await getUserId();
+    try {
+      const response = await fetch('http://localhost:5000/api/new-jobs', {
+        headers: { 'X-User-Id': userId, 'Accept': 'application/json' }
+      });
+      if (!response.ok) return;
+      const newJobs: any[] = await response.json();
+      if (!newJobs?.length) return;
+
+      for (const job of newJobs) {
+        if (!jobMatchesConfig(job, monitorConfig)) continue;
+        if (!alertsEnabled) continue;
+        const notificationId = `job-alert-${job.id}-${Date.now()}`;
+        notificationUrls.set(notificationId, job.url);
+        browser.notifications.create(notificationId, {
+          type: 'basic',
+          iconUrl: '/icon/128.png',
+          title: `🚨 New Match: ${job.companyName}`,
+          message: `${job.title}\n📍 ${job.location}`,
+          buttons: [{ title: 'Apply Now →' }],
+          priority: 2
+        });
+      }
+    } catch (err) {
+      console.warn('[Background] Poll failed:', err);
+    }
+  };
 
   // Start polling
   pollForNewJobs();

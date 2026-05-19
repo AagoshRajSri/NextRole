@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
+import { Redis } from 'ioredis';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -36,7 +36,7 @@ const stripe = stripeKey.startsWith('sk_') ? new Stripe(stripeKey) : null;
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 let monitorQueue: Queue | null = null;
 try {
-  const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+  const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
   monitorQueue = new Queue('monitorQueue', { connection });
   console.log('[Server] Successfully connected to Redis for BullMQ.');
 } catch (e) {
@@ -225,6 +225,44 @@ app.post('/api/profile', async (req, res) => {
  * TAILORED RESUMES API
  * ----------------------------------------------------
  */
+
+// GET /api/resumes/lookup - Query tailored resume by active URL
+app.get('/api/resumes/lookup', async (req, res) => {
+  const url = req.query.url as string;
+  const userId = getUserId(req);
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required.' });
+  }
+
+  try {
+    const snapshot = await prisma.jobSnapshot.findFirst({
+      where: {
+        url: {
+          contains: url
+        },
+        trackedSearch: { userId }
+      },
+      include: {
+        tailoredResumes: {
+          orderBy: { createdAt: 'desc' },
+          take: 1
+        }
+      }
+    });
+
+    if (!snapshot || snapshot.tailoredResumes.length === 0) {
+      return res.status(404).json({ error: 'No tailored resume found for this job.' });
+    }
+
+    res.json({
+      snapshot,
+      resume: snapshot.tailoredResumes[0]
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/resumes/:jobId - Get tailored resume for a specific job snapshot
 app.get('/api/resumes/:jobId', async (req, res) => {

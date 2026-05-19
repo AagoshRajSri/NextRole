@@ -1,396 +1,375 @@
-interface SavedSearch {
-  id: string;
-  companyName: string;
-  url: string;
-  createdAt: number;
+// ─────────────────────────────────────────────────────────
+//  NextRole Popup — System Console v2
+// ─────────────────────────────────────────────────────────
+
+interface SavedSearch { id: string; companyName: string; url: string; createdAt: number; }
+
+interface MonitorConfig {
+  active: boolean;
+  mode: 'keywords' | 'all';
+  roles: string[];
+  stack: string[];
+  location: string;
+  autoApply: boolean;
+  instantAlerts: boolean;
 }
 
+const DEFAULT_CONFIG: MonitorConfig = {
+  active: false,
+  mode: 'keywords',
+  roles: ['Software Engineer', 'Intern'],
+  stack: ['Node.js', 'Java', 'TypeScript'],
+  location: 'anywhere-india',
+  autoApply: false,
+  instantAlerts: true,
+};
+
+// ── State ──────────────────────────────────────────────
+let config: MonitorConfig = { ...DEFAULT_CONFIG };
+
+// ── Boot ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  const searchListContainer = document.getElementById('search-list');
-  const savedCountElement = document.getElementById('saved-count');
+  await ensureUserId();
+  await loadConfig();
 
-  if (!searchListContainer || !savedCountElement) return;
+  renderUI();
+  wireNavTabs();
+  wireSegControl();
+  wireTagInputs();
+  wireToggles();
+  wireLaunchBtn();
+  wireProfileForm();
 
-  // Initialize and load saved searches
-  await renderSavedSearches(searchListContainer, savedCountElement);
+  // Kick off career feed render
+  await renderChannelList();
 
-  // Initialize User ID in storage if background script hasn't run yet
-  const userStorage = (await browser.storage.local.get('userId')) as any;
-  if (!userStorage || !userStorage.userId) {
-    const newId = `usr-${Math.random().toString(36).substring(2, 11)}`;
-    await browser.storage.local.set({ userId: newId });
-  }
-
-  // ----------------------------------------------------
-  // NAVIGATION TABS LOGIC
-  // ----------------------------------------------------
-  const tabTracked = document.getElementById('tab-tracked');
-  const tabProfile = document.getElementById('tab-profile');
-  const trackedView = document.getElementById('tracked-view');
-  const profileView = document.getElementById('profile-view');
-
-  if (tabTracked && tabProfile && trackedView && profileView) {
-    tabTracked.addEventListener('click', () => {
-      tabTracked.classList.add('active');
-      tabProfile.classList.remove('active');
-      trackedView.classList.remove('hidden');
-      profileView.classList.add('hidden');
-    });
-
-    tabProfile.addEventListener('click', async () => {
-      tabProfile.classList.add('active');
-      tabTracked.classList.remove('active');
-      profileView.classList.remove('hidden');
-      trackedView.classList.add('hidden');
-      
-      // Load user profile and subscription status on profile view activation
-      await loadProfileAndSubscription();
-    });
-  }
-
-  // ----------------------------------------------------
-  // PROFILE (MASTER RESUME) SUBMIT LOGIC
-  // ----------------------------------------------------
-  const profileForm = document.getElementById('profile-form');
-  if (profileForm) {
-    profileForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      
-      const storage = (await browser.storage.local.get('userId')) as any;
-      const userId = (storage?.userId as string) || 'default-user';
-      
-      const skills = (document.getElementById('prof-skills') as HTMLInputElement)?.value || '';
-      const experience = (document.getElementById('prof-experience') as HTMLTextAreaElement)?.value || '';
-      const education = (document.getElementById('prof-education') as HTMLTextAreaElement)?.value || '';
-      const projects = (document.getElementById('prof-projects') as HTMLTextAreaElement)?.value || '';
-      
-      const saveBtn = document.getElementById('btn-save-profile');
-      if (saveBtn) {
-        saveBtn.textContent = 'Saving Resume...';
-        saveBtn.setAttribute('disabled', 'true');
-      }
-
-      try {
-        const res = await fetch('http://localhost:5000/api/profile', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Id': userId
-          },
-          body: JSON.stringify({ skills, experience, education, projects })
-        });
-        
-        if (res.ok) {
-          if (saveBtn) {
-            saveBtn.textContent = 'Saved Successfully! ✓';
-            saveBtn.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
-            setTimeout(() => {
-              saveBtn.textContent = 'Save Master Resume';
-              saveBtn.style.background = '';
-              saveBtn.removeAttribute('disabled');
-            }, 2000);
-          }
-        } else {
-          throw new Error('Failed to save profile on backend');
-        }
-      } catch (err) {
-        console.error('[Popup] Save profile failed:', err);
-        if (saveBtn) {
-          saveBtn.textContent = 'Error Saving! ❌';
-          saveBtn.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
-          setTimeout(() => {
-            saveBtn.textContent = 'Save Master Resume';
-            saveBtn.style.background = '';
-            saveBtn.removeAttribute('disabled');
-          }, 2000);
-        }
-      }
-    });
-  }
-
-  // ----------------------------------------------------
-  // STRIPE PAYWALL BILLING LOGIC
-  // ----------------------------------------------------
-  const upgradeBtn = document.getElementById('btn-upgrade');
-  if (upgradeBtn) {
-    upgradeBtn.addEventListener('click', async () => {
-      const storage = (await browser.storage.local.get('userId')) as any;
-      const userId = (storage?.userId as string) || 'default-user';
-      
-      upgradeBtn.textContent = 'Connecting...';
-      upgradeBtn.setAttribute('disabled', 'true');
-
-      try {
-        const res = await fetch('http://localhost:5000/api/checkout', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Id': userId
-          }
-        });
-        
-        if (res.ok) {
-          const data = await res.json();
-          if (data.url) {
-            // Open payment check out portal
-            browser.tabs.create({ url: data.url });
-            
-            // Check if mock checkout triggered instant premium activation locally
-            if (data.url.includes('mock-success-premium-activated')) {
-              setTimeout(async () => {
-                await loadProfileAndSubscription();
-                upgradeBtn.textContent = 'Upgrade ($15/mo)';
-                upgradeBtn.removeAttribute('disabled');
-              }, 1200);
-            }
-          }
-        } else {
-          throw new Error('Failed to create checkout');
-        }
-      } catch (err) {
-        console.error('[Popup] Stripe checkout redirection failed:', err);
-        upgradeBtn.textContent = 'Failed ❌';
-        setTimeout(() => {
-          upgradeBtn.textContent = 'Upgrade ($15/mo)';
-          upgradeBtn.removeAttribute('disabled');
-        }, 1500);
-      }
-    });
-  }
+  // Live latency measurement
+  measureLatency();
 });
 
-/**
- * Load user's profile and premium billing status from backend PostgreSQL
- */
-async function loadProfileAndSubscription() {
-  const storage = (await browser.storage.local.get('userId')) as any;
-  const userId = (storage?.userId as string) || 'default-user';
-  
-  // 1. Fetch Subscription details
-  try {
-    const subRes = await fetch('http://localhost:5000/api/subscription', {
-      headers: { 'X-User-Id': userId }
-    });
-    if (subRes.ok) {
-      const subData = await subRes.json();
-      const banner = document.getElementById('premium-banner');
-      const statusText = document.getElementById('premium-status');
-      const upgradeBtn = document.getElementById('btn-upgrade');
-      
-      if (banner && statusText && upgradeBtn) {
-        if (subData.isActive) {
-          banner.classList.add('active');
-          statusText.innerHTML = '✨ NEXTROLE PREMIUM ACTIVE';
-          upgradeBtn.style.display = 'none';
-        } else {
-          banner.classList.remove('active');
-          statusText.innerHTML = 'FREE ACCOUNT';
-          upgradeBtn.style.display = 'block';
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[Popup] Backend subscription fetch failed:', err);
-  }
-
-  // 2. Fetch Profile details
-  try {
-    const profRes = await fetch('http://localhost:5000/api/profile', {
-      headers: { 'X-User-Id': userId }
-    });
-    if (profRes.ok) {
-      const profData = await profRes.json();
-      
-      const skillsInput = document.getElementById('prof-skills') as HTMLInputElement;
-      const expTextarea = document.getElementById('prof-experience') as HTMLTextAreaElement;
-      const eduTextarea = document.getElementById('prof-education') as HTMLTextAreaElement;
-      const projTextarea = document.getElementById('prof-projects') as HTMLTextAreaElement;
-      
-      if (skillsInput) skillsInput.value = profData.skills || '';
-      if (expTextarea) expTextarea.value = profData.experience || '';
-      if (eduTextarea) eduTextarea.value = profData.education || '';
-      if (projTextarea) projTextarea.value = profData.projects || '';
-    }
-  } catch (err) {
-    console.warn('[Popup] Backend profile load failed:', err);
+// ── User ID ────────────────────────────────────────────
+async function ensureUserId() {
+  const data = await browser.storage.local.get('userId') as any;
+  if (!data?.userId) {
+    await browser.storage.local.set({ userId: `usr-${Math.random().toString(36).slice(2, 11)}` });
   }
 }
 
-async function renderSavedSearches(
-  container: HTMLElement,
-  countElement: HTMLElement
-) {
-  try {
-    const data = (await browser.storage.local.get('savedSearches')) as any;
-    const savedSearches = (data?.savedSearches as SavedSearch[]) || [];
+async function getUserId(): Promise<string> {
+  const d = await browser.storage.local.get('userId') as any;
+  return d?.userId ?? 'default-user';
+}
 
-    // Update count element
-    countElement.textContent = `${savedSearches.length} saved`;
-
-    // Clear previous items
-    container.innerHTML = '';
-
-    if (savedSearches.length === 0) {
-      container.appendChild(createEmptyStateElement());
-      return;
-    }
-
-    // Sort searches by most recently created
-    const sortedSearches = [...savedSearches].sort((a, b) => b.createdAt - a.createdAt);
-
-    sortedSearches.forEach((search) => {
-      const card = createSearchCard(search, async () => {
-        // Trigger visual delete animation
-        card.classList.add('card-exit');
-        card.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-        card.style.opacity = '0';
-        card.style.transform = 'scale(0.9) translateY(-10px)';
-
-        setTimeout(async () => {
-          // Remove from local storage
-          const currentData = (await browser.storage.local.get('savedSearches')) as any;
-          const currentSearches = (currentData?.savedSearches as SavedSearch[]) || [];
-          const updatedSearches = currentSearches.filter((s) => s.id !== search.id);
-          await browser.storage.local.set({ savedSearches: updatedSearches });
-
-          // Sync deletion to backend
-          try {
-            const userStorage = (await browser.storage.local.get('userId')) as any;
-            const userId = (userStorage?.userId as string) || 'default-user';
-            
-            // Search matching URL on backend to delete
-            const searchesRes = await fetch('http://localhost:5000/api/tracked-searches', {
-              headers: { 'X-User-Id': userId }
-            });
-            if (searchesRes.ok) {
-              const backendSearches: any[] = await searchesRes.json();
-              const backendMatch = backendSearches.find(s => s.url === search.url);
-              if (backendMatch) {
-                await fetch(`http://localhost:5000/api/tracked-searches/${backendMatch.id}`, {
-                  method: 'DELETE',
-                  headers: { 'X-User-Id': userId }
-                });
-                console.log('[Popup] Successfully synced deletion to backend database.');
-              }
-            }
-          } catch (backendErr) {
-            console.warn('[Popup] Deletion sync to backend offline.', backendErr);
-          }
-
-          // Re-render
-          renderSavedSearches(container, countElement);
-        }, 300);
-      });
-      container.appendChild(card);
-    });
-  } catch (err) {
-    console.error('[NextRole] Error loading searches in popup:', err);
-    container.innerHTML = `<div style="color: #f87171; padding: 20px; text-align: center; font-size: 13px;">Error loading saved searches.</div>`;
+// ── Config persistence ─────────────────────────────────
+async function loadConfig() {
+  const d = await browser.storage.local.get('monitorConfig') as any;
+  if (d?.monitorConfig) {
+    config = { ...DEFAULT_CONFIG, ...d.monitorConfig };
   }
 }
 
-function createSearchCard(search: SavedSearch, onDelete: () => void): HTMLElement {
-  const card = document.createElement('div');
-  card.className = 'search-card';
+async function saveConfig() {
+  await browser.storage.local.set({ monitorConfig: config });
+}
 
-  const initial = search.companyName ? search.companyName.charAt(0) : '?';
+// ── Render all UI from state ────────────────────────────
+function renderUI() {
+  renderTags('roles', config.roles);
+  renderTags('stack', config.stack);
 
-  card.innerHTML = `
-    <div class="card-details">
-      <div class="avatar">${initial}</div>
-      <div class="info">
-        <div class="company-name">${escapeHtml(search.companyName)}</div>
-        <a class="search-url" title="${escapeHtml(search.url)}" data-url="${escapeHtml(search.url)}">
-          ${escapeHtml(cleanUrlDisplay(search.url))}
-        </a>
-      </div>
-    </div>
-    <div class="actions">
-      <button class="btn btn-open" title="Open Job Board" data-action="open">
-        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-          <polyline points="15 3 21 3 21 9"></polyline>
-          <line x1="10" y1="14" x2="21" y2="3"></line>
-        </svg>
-      </button>
-      <button class="btn btn-delete" title="Delete Tracked Search" data-action="delete">
-        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="3 6 5 6 21 6"></polyline>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-          <line x1="10" y1="11" x2="10" y2="17"></line>
-          <line x1="14" y1="11" x2="14" y2="17"></line>
-        </svg>
-      </button>
-    </div>
-  `;
+  const locSel = document.getElementById('location-select') as HTMLSelectElement;
+  if (locSel) locSel.value = config.location;
 
-  // Event handler to open links
-  const openSearch = () => {
-    browser.tabs.create({ url: search.url });
+  setToggle('toggle-autoapply', config.autoApply);
+  setToggle('toggle-alerts', config.instantAlerts);
+  updateSlotBadge();
+  updateMonitorStatus();
+}
+
+// ── Tags ───────────────────────────────────────────────
+function renderTags(type: 'roles' | 'stack', items: string[]) {
+  const wrap = document.getElementById(`${type}-tags`);
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  items.forEach(item => {
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.innerHTML = `${escHtml(item)}<span class="rm" data-tag="${escHtml(item)}" data-type="${type}">×</span>`;
+    tag.querySelector('.rm')?.addEventListener('click', async () => {
+      if (type === 'roles') config.roles = config.roles.filter(r => r !== item);
+      else config.stack = config.stack.filter(s => s !== item);
+      await saveConfig();
+      renderTags(type, type === 'roles' ? config.roles : config.stack);
+      updateSlotBadge();
+    });
+    wrap.appendChild(tag);
+  });
+}
+
+function wireTagInputs() {
+  wireOneTagInput('roles-input', 'roles-add', 'roles');
+  wireOneTagInput('stack-input', 'stack-add', 'stack');
+}
+
+function wireOneTagInput(inputId: string, btnId: string, type: 'roles' | 'stack') {
+  const input = document.getElementById(inputId) as HTMLInputElement;
+  const btn = document.getElementById(btnId);
+  if (!input || !btn) return;
+
+  const add = async () => {
+    const val = input.value.trim();
+    if (!val) return;
+    const arr = type === 'roles' ? config.roles : config.stack;
+    if (!arr.includes(val)) {
+      arr.push(val);
+      await saveConfig();
+      renderTags(type, arr);
+      updateSlotBadge();
+    }
+    input.value = '';
   };
 
-  const urlElement = card.querySelector('.search-url');
-  if (urlElement) {
-    urlElement.addEventListener('click', (e) => {
-      e.preventDefault();
-      openSearch();
+  btn.addEventListener('click', add);
+  input.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter') add(); });
+}
+
+function updateSlotBadge() {
+  const total = config.roles.length + config.stack.length;
+  const badge = document.getElementById('slot-badge');
+  if (badge) badge.textContent = `${total}/10 SLOTS`;
+}
+
+// ── Toggles ────────────────────────────────────────────
+function setToggle(id: string, on: boolean) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (on) el.classList.add('on');
+  else el.classList.remove('on');
+}
+
+function wireToggles() {
+  document.querySelectorAll<HTMLElement>('.toggle-switch').forEach(el => {
+    el.addEventListener('click', async () => {
+      const key = el.dataset.key as 'autoApply' | 'instantAlerts';
+      (config as any)[key] = !(config as any)[key];
+      setToggle(el.id, (config as any)[key]);
+      await saveConfig();
+
+      // Sync instantAlerts flag to background service worker
+      if (key === 'instantAlerts') {
+        browser.runtime.sendMessage({ action: 'setAlerts', enabled: config.instantAlerts });
+      }
+    });
+  });
+
+  // Location select
+  const locSel = document.getElementById('location-select') as HTMLSelectElement;
+  if (locSel) {
+    locSel.addEventListener('change', async () => {
+      config.location = locSel.value;
+      await saveConfig();
     });
   }
-
-  const openBtn = card.querySelector('[data-action="open"]');
-  if (openBtn) {
-    openBtn.addEventListener('click', openSearch);
-  }
-
-  // Delete event handler
-  const deleteBtn = card.querySelector('[data-action="delete"]');
-  if (deleteBtn) {
-    deleteBtn.addEventListener('click', onDelete);
-  }
-
-  return card;
 }
 
-function createEmptyStateElement(): HTMLElement {
-  const emptyState = document.createElement('div');
-  emptyState.className = 'empty-state';
-  emptyState.innerHTML = `
-    <div class="radar-scanner">
-      <div class="radar-ring"></div>
-      <div class="radar-ring-inner"></div>
-      <div class="radar-beam"></div>
-    </div>
-    <div class="empty-title">No careers channels tracked yet</div>
-    <div class="empty-desc">Visit any Workday, Greenhouse, or Lever careers board and click "Track Careers Page" to connect your feed.</div>
-  `;
-  return emptyState;
+// ── Segmented control ──────────────────────────────────
+function wireSegControl() {
+  document.querySelectorAll<HTMLElement>('.seg-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      config.mode = btn.dataset.mode as 'keywords' | 'all';
+      await saveConfig();
+
+      // Show/hide keyword groups based on mode
+      const rolesGroup = document.getElementById('roles-group');
+      const stackGroup = document.getElementById('stack-group');
+      const isKeywords = config.mode === 'keywords';
+      if (rolesGroup) rolesGroup.style.display = isKeywords ? '' : 'none';
+      if (stackGroup) stackGroup.style.display = isKeywords ? '' : 'none';
+    });
+  });
 }
 
-function cleanUrlDisplay(urlStr: string): string {
+// ── Launch button ──────────────────────────────────────
+function updateMonitorStatus() {
+  const el = document.getElementById('monitor-status');
+  const btn = document.getElementById('launch-btn');
+  if (el) el.classList.toggle('show', config.active);
+  if (btn) {
+    if (config.active) {
+      btn.classList.add('active-state');
+      btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12"/></svg> STOP MONITOR`;
+    } else {
+      btn.classList.remove('active-state');
+      btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l-4 4 4 4M15 13l4-4-4-4M13 4l-2 16"/></svg> LAUNCH MONITOR`;
+    }
+  }
+}
+
+function wireLaunchBtn() {
+  const btn = document.getElementById('launch-btn');
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    config.active = !config.active;
+    await saveConfig();
+    updateMonitorStatus();
+
+    // Notify the background service worker to start/stop keyword scanning
+    browser.runtime.sendMessage({
+      action: config.active ? 'startMonitor' : 'stopMonitor',
+      config: {
+        mode: config.mode,
+        roles: config.roles,
+        stack: config.stack,
+        location: config.location,
+        instantAlerts: config.instantAlerts,
+      }
+    });
+  });
+}
+
+// ── Navigation tabs ─────────────────────────────────────
+function wireNavTabs() {
+  document.querySelectorAll<HTMLElement>('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const viewId = `view-${btn.dataset.view}`;
+      document.querySelectorAll<HTMLElement>('.view').forEach(v => v.classList.remove('active'));
+      document.getElementById(viewId)?.classList.add('active');
+
+      if (btn.dataset.view === 'career-feed') renderChannelList();
+      if (btn.dataset.view === 'architect') loadProfileData();
+    });
+  });
+}
+
+// ── Career Feed ─────────────────────────────────────────
+async function renderChannelList() {
+  const container = document.getElementById('channel-list');
+  const countEl = document.getElementById('channel-count');
+  if (!container) return;
+
+  const d = await browser.storage.local.get('savedSearches') as any;
+  const searches: SavedSearch[] = d?.savedSearches ?? [];
+
+  if (countEl) countEl.textContent = `${searches.length} TRACKED`;
+
+  if (searches.length === 0) {
+    container.innerHTML = `<div class="empty-state">No channels tracked yet.<br/>Visit a job board and click Track.</div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+  const sorted = [...searches].sort((a, b) => b.createdAt - a.createdAt);
+
+  sorted.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'channel-card';
+    const initial = s.companyName?.charAt(0) ?? '?';
+    const shortUrl = cleanUrl(s.url);
+    card.innerHTML = `
+      <div class="channel-av">${initial}</div>
+      <div class="channel-info">
+        <div class="channel-name">${escHtml(s.companyName)}</div>
+        <div class="channel-url" data-url="${escHtml(s.url)}">${escHtml(shortUrl)}</div>
+      </div>
+      <div class="ch-actions">
+        <button class="ch-btn open" title="Open">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </button>
+        <button class="ch-btn del" title="Remove" data-id="${s.id}" data-url="${escHtml(s.url)}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    `;
+
+    card.querySelector('.channel-url')?.addEventListener('click', () => browser.tabs.create({ url: s.url }));
+    card.querySelector('.open')?.addEventListener('click', () => browser.tabs.create({ url: s.url }));
+    card.querySelector('.del')?.addEventListener('click', async () => {
+      card.style.opacity = '0';
+      card.style.transform = 'scale(0.95)';
+      card.style.transition = 'all 0.25s ease';
+      setTimeout(async () => {
+        const cur = await browser.storage.local.get('savedSearches') as any;
+        const updated = ((cur?.savedSearches ?? []) as SavedSearch[]).filter(x => x.id !== s.id);
+        await browser.storage.local.set({ savedSearches: updated });
+        await renderChannelList();
+      }, 250);
+    });
+
+    container.appendChild(card);
+  });
+}
+
+// ── Architect / Profile ─────────────────────────────────
+async function loadProfileData() {
   try {
-    const url = new URL(urlStr);
-    let display = url.hostname;
-    if (url.pathname && url.pathname !== '/') {
-      display += url.pathname;
+    const userId = await getUserId();
+    const res = await fetch(`http://localhost:5000/api/profile`, { headers: { 'X-User-Id': userId } });
+    if (!res.ok) return;
+    const d = await res.json();
+    (document.getElementById('prof-skills') as HTMLInputElement).value = d.skills ?? '';
+    (document.getElementById('prof-experience') as HTMLTextAreaElement).value = d.experience ?? '';
+    (document.getElementById('prof-education') as HTMLTextAreaElement).value = d.education ?? '';
+    (document.getElementById('prof-projects') as HTMLTextAreaElement).value = d.projects ?? '';
+  } catch { /* backend offline */ }
+}
+
+function wireProfileForm() {
+  const btn = document.getElementById('save-profile-btn') as HTMLButtonElement;
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const userId = await getUserId();
+    const body = {
+      skills: (document.getElementById('prof-skills') as HTMLInputElement).value,
+      experience: (document.getElementById('prof-experience') as HTMLTextAreaElement).value,
+      education: (document.getElementById('prof-education') as HTMLTextAreaElement).value,
+      projects: (document.getElementById('prof-projects') as HTMLTextAreaElement).value,
+    };
+    btn.textContent = 'SAVING...';
+    btn.disabled = true;
+    try {
+      const res = await fetch('http://localhost:5000/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+        body: JSON.stringify(body),
+      });
+      btn.textContent = res.ok ? '✓ SAVED!' : '✗ FAILED';
+    } catch {
+      btn.textContent = '✗ OFFLINE';
+    } finally {
+      setTimeout(() => { btn.textContent = 'SAVE MASTER RESUME'; btn.disabled = false; }, 2000);
     }
-    if (url.search) {
-      display += url.search;
-    }
-    // Limit to 45 chars for clean presentation
-    if (display.length > 45) {
-      return display.substring(0, 42) + '...';
-    }
-    return display;
-  } catch (e) {
-    return urlStr;
+  });
+}
+
+// ── Latency pinger ─────────────────────────────────────
+async function measureLatency() {
+  const el = document.getElementById('latency-display');
+  if (!el) return;
+  try {
+    const t0 = Date.now();
+    await fetch('http://localhost:5000/api/health', { method: 'GET' });
+    const ms = Date.now() - t0;
+    el.textContent = `LATENCY: ${ms}MS`;
+  } catch {
+    el.textContent = `LATENCY: --MS`;
   }
 }
 
-function escapeHtml(unsafe: string): string {
-  return unsafe
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+// ── Helpers ────────────────────────────────────────────
+function cleanUrl(urlStr: string): string {
+  try {
+    const u = new URL(urlStr);
+    let s = u.hostname + (u.pathname !== '/' ? u.pathname : '');
+    return s.length > 42 ? s.slice(0, 39) + '...' : s;
+  } catch { return urlStr; }
+}
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

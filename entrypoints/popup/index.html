@@ -1,734 +1,659 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NextRole - Cyber Careers Co-pilot</title>
-    <meta name="manifest.type" content="browser_action" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <style>
-      :root {
-        --bg-color: #030712;
-        --panel-bg: rgba(10, 15, 30, 0.65);
-        --panel-border: rgba(255, 255, 255, 0.08);
-        --text-primary: #f3f4f6;
-        --text-secondary: #94a3b8;
-        --accent-primary: #6366f1;
-        --accent-secondary: #06b6d4;
-        --accent-glow: rgba(99, 102, 241, 0.25);
-        --danger-color: #f43f5e;
-        --danger-bg: rgba(244, 63, 94, 0.12);
-        --card-bg: rgba(10, 15, 30, 0.45);
-        --card-border: rgba(255, 255, 255, 0.04);
-        --card-hover: rgba(17, 24, 39, 0.8);
-        --font-primary: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-        --font-mono: 'Space Grotesk', monospace;
-      }
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NextRole Co-pilot</title>
+  <meta name="manifest.type" content="browser_action" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #051424;
+      --surface: #0d1c2d;
+      --surface2: #0a1628;
+      --border: rgba(0,240,255,0.12);
+      --border2: rgba(255,255,255,0.06);
+      --yellow: #f0ff00;
+      --yellow-dim: rgba(240,255,0,0.12);
+      --cyan: #00f0ff;
+      --cyan-dim: rgba(0,240,255,0.1);
+      --text: #e2eaf4;
+      --muted: #4a6080;
+      --font: 'Space Grotesk', sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 400px;
+      min-height: 580px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(0,240,255,0.15); border-radius: 4px; }
 
-      body {
-        margin: 0;
-        padding: 0;
-        width: 360px;
-        min-height: 460px;
-        max-height: 570px;
-        background-color: var(--bg-color);
-        /* Futuristic digital grid gridline overlay */
-        background-image: 
-          linear-gradient(rgba(99, 102, 241, 0.02) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(99, 102, 241, 0.02) 1px, transparent 1px);
-        background-size: 20px 20px;
-        background-position: center;
-        color: var(--text-primary);
-        font-family: var(--font-primary);
-        overflow-x: hidden;
-        overflow-y: auto;
-        box-sizing: border-box;
-      }
+    /* ── HEADER ── */
+    .hdr {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px 0;
+    }
+    .logo {
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--yellow);
+      letter-spacing: 2px;
+      text-shadow: 0 0 18px rgba(240,255,0,0.45);
+      padding-bottom: 8px;
+    }
+    .tab-bar {
+      display: flex;
+      gap: 0;
+    }
+    .tab-bar button {
+      flex: 1;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 8px 4px;
+      cursor: pointer;
+      position: relative;
+      transition: color .2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      outline: none;
+    }
+    .tab-bar button.active { color: var(--yellow); }
+    .tab-bar button.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--yellow);
+      border-radius: 2px 2px 0 0;
+      box-shadow: 0 0 8px var(--yellow);
+    }
+    .tab-bar button:not(.active):hover { color: var(--cyan); }
 
-      /* Custom scrollbar */
-      ::-webkit-scrollbar {
-        width: 5px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.06);
-        border-radius: 99px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: rgba(255, 255, 255, 0.15);
-      }
+    /* ── VIEWS ── */
+    .view { display: none; flex-direction: column; gap: 10px; padding: 12px 14px; }
+    .view.active { display: flex; }
 
-      .app-container {
-        padding: 22px;
-        display: flex;
-        flex-direction: column;
-        gap: 18px;
-        position: relative;
-      }
+    /* ── STATUS CARD ── */
+    .status-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status-left { display: flex; flex-direction: column; gap: 3px; }
+    .status-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--cyan);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .status-name { font-size: 13px; font-weight: 700; color: var(--text); }
+    .status-link {
+      font-family: var(--mono);
+      font-size: 9.5px;
+      color: var(--muted);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .status-link:hover { color: var(--cyan); }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 0 6px var(--cyan); }
+      50% { box-shadow: 0 0 14px var(--cyan); }
+    }
 
-      /* Decorative Cyberpunk Neon Ambient Glows */
-      .app-container::before {
-        content: '';
-        position: absolute;
-        top: -60px;
-        right: -60px;
-        width: 140px;
-        height: 140px;
-        background: radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 70%);
-        pointer-events: none;
-        z-index: 0;
-      }
-      .app-container::after {
-        content: '';
-        position: absolute;
-        bottom: -60px;
-        left: -60px;
-        width: 140px;
-        height: 140px;
-        background: radial-gradient(circle, rgba(139, 92, 246, 0.08) 0%, transparent 70%);
-        pointer-events: none;
-        z-index: 0;
-      }
+    /* ── SEGMENTED CONTROL ── */
+    .seg {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 3px;
+      gap: 3px;
+    }
+    .seg button {
+      flex: 1;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      padding: 7px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all .2s;
+      outline: none;
+      letter-spacing: 0.3px;
+    }
+    .seg button.active {
+      background: var(--yellow-dim);
+      border: 1px solid rgba(240,255,0,0.3);
+      color: var(--yellow);
+    }
 
-      .header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        border-bottom: 1px solid var(--panel-border);
-        padding-bottom: 14px;
-        z-index: 1;
-      }
+    /* ── PARAM GROUP ── */
+    .param-group {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .param-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .param-label svg { color: var(--cyan); flex-shrink: 0; }
+    .tags-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag {
+      background: rgba(240,255,0,0.08);
+      border: 1px solid rgba(240,255,0,0.25);
+      color: var(--yellow);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .tag .rm {
+      cursor: pointer;
+      color: rgba(240,255,0,0.5);
+      font-size: 12px;
+      line-height: 1;
+      transition: color .15s;
+    }
+    .tag .rm:hover { color: var(--yellow); }
+    .tag-input-row {
+      display: flex;
+      align-items: center;
+      background: var(--bg);
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      padding: 5px 8px;
+      gap: 6px;
+    }
+    .tag-input-row input {
+      flex: 1;
+      background: none;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+    .tag-input-row input::placeholder { color: var(--muted); }
+    .tag-input-row button {
+      background: none;
+      border: none;
+      color: var(--cyan);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      padding: 0;
+      outline: none;
+      transition: color .15s;
+    }
+    .tag-input-row button:hover { color: var(--yellow); }
 
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 9px;
-      }
+    /* location select */
+    .loc-select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 7px 10px;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+    }
+    .loc-wrap { position: relative; }
+    .loc-wrap svg {
+      position: absolute;
+      right: 8px; top: 50%;
+      transform: translateY(-50%);
+      color: var(--cyan);
+      pointer-events: none;
+    }
 
-      /* Holographic spin animation */
-      @keyframes logo-spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
-      }
+    /* ── TOGGLES ── */
+    .toggles-group {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .toggle-label {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .toggle-label svg { color: var(--yellow); flex-shrink: 0; }
+    .toggle-switch {
+      width: 40px; height: 22px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      position: relative;
+      cursor: pointer;
+      transition: background .25s;
+      flex-shrink: 0;
+    }
+    .toggle-switch.on { background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 10px rgba(0,240,255,0.4); }
+    .toggle-switch.amber.on { background: #f97316; border-color: #f97316; box-shadow: 0 0 10px rgba(249,115,22,0.4); }
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      transition: left .25s;
+    }
+    .toggle-switch.on::after { left: 20px; }
 
-      .logo-icon {
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(6, 182, 212, 0.15) 100%);
-        width: 28px;
-        height: 28px;
-        border-radius: 6px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid rgba(6, 182, 212, 0.25);
-        box-shadow: 0 0 10px rgba(6, 182, 212, 0.15);
-      }
+    /* ── MONITOR SECTION HEADER ── */
+    .section-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 9.5px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+    }
+    .slot-badge {
+      background: var(--cyan-dim);
+      border: 1px solid rgba(0,240,255,0.2);
+      color: var(--cyan);
+      font-family: var(--mono);
+      font-size: 9px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
 
-      .logo-svg {
-        width: 15px;
-        height: 15px;
-        animation: logo-spin 15s linear infinite;
-      }
+    /* ── LAUNCH BUTTON ── */
+    #launch-btn {
+      width: 100%;
+      background: var(--yellow);
+      border: none;
+      border-radius: 10px;
+      color: #000;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      padding: 13px;
+      cursor: pointer;
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      outline: none;
+      transition: all .25s;
+      box-shadow: 0 0 20px rgba(240,255,0,0.3);
+      margin-top: 2px;
+    }
+    #launch-btn:hover {
+      box-shadow: 0 0 32px rgba(240,255,0,0.55);
+      transform: translateY(-1px);
+    }
+    #launch-btn:active { transform: translateY(0); }
+    #launch-btn.active-state {
+      background: #00c851;
+      box-shadow: 0 0 24px rgba(0,200,81,0.45);
+    }
 
-      .brand-details {
-        display: flex;
-        flex-direction: column;
-        gap: 1px;
-      }
+    /* ── STATUS BAR ── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+      border-top: 1px solid var(--border2);
+      padding: 7px 14px;
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+    }
+    .status-bar .left { color: var(--text); }
+    .status-bar .right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #f87171;
+    }
+    .status-bar .enc { color: var(--muted); }
 
-      .brand-name {
-        font-family: var(--font-mono);
-        font-size: 15px;
-        font-weight: 700;
-        letter-spacing: 0.8px;
-        background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-      }
+    /* ── CAREER FEED / ARCHITECT views ── */
+    .channel-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      transition: border-color .2s;
+    }
+    .channel-card:hover { border-color: rgba(0,240,255,0.25); }
+    .channel-av {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      background: var(--cyan-dim);
+      border: 1px solid rgba(0,240,255,0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--cyan);
+      flex-shrink: 0;
+    }
+    .channel-info { flex: 1; min-width: 0; }
+    .channel-name { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .channel-url { font-family: var(--mono); font-size: 9px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    .channel-url:hover { color: var(--cyan); }
+    .ch-actions { display: flex; gap: 5px; }
+    .ch-btn {
+      background: none;
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      width: 26px; height: 26px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      color: var(--muted);
+      transition: all .15s;
+      outline: none;
+    }
+    .ch-btn:hover { border-color: rgba(0,240,255,0.3); color: var(--cyan); }
+    .ch-btn.del:hover { border-color: rgba(248,113,113,0.3); color: #f87171; }
 
-      .brand-sub {
-        font-family: var(--font-mono);
-        font-size: 8px;
-        color: var(--accent-secondary);
-        letter-spacing: 0.5px;
-        font-weight: 700;
-      }
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
 
-      /* Pulsing Secure Status Header */
-      .status-indicator {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        background: rgba(6, 182, 212, 0.05);
-        border: 1px solid rgba(6, 182, 212, 0.12);
-        padding: 4px 8px;
-        border-radius: 6px;
-      }
+    /* profile form */
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group label { font-family: var(--mono); font-size: 9px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }
+    .form-group input, .form-group textarea {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 8px 10px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 11.5px;
+      outline: none;
+      resize: vertical;
+      transition: border-color .2s;
+    }
+    .form-group input:focus, .form-group textarea:focus { border-color: rgba(0,240,255,0.3); }
+    .form-group textarea { min-height: 52px; }
+    .save-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      border: none;
+      border-radius: 9px;
+      color: #fff;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 10px;
+      cursor: pointer;
+      outline: none;
+      transition: all .25s;
+      box-shadow: 0 4px 14px rgba(99,102,241,0.3);
+    }
+    .save-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(99,102,241,0.45); }
 
-      @keyframes pulse-glow {
-        0% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.35); }
-        70% { box-shadow: 0 0 0 5px rgba(6, 182, 212, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0); }
-      }
+    .monitor-status {
+      background: rgba(0,200,81,0.06);
+      border: 1px solid rgba(0,200,81,0.2);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: #00c851;
+      display: none;
+      align-items: center;
+      gap: 7px;
+    }
+    .monitor-status.show { display: flex; }
+    .ms-dot { width: 6px; height: 6px; border-radius: 50%; background: #00c851; box-shadow: 0 0 8px #00c851; animation: pulse 1.5s infinite; }
+  </style>
+</head>
+<body>
+  <!-- HEADER -->
+  <div class="hdr">
+    <div class="logo">NextRole</div>
+    <div class="tab-bar">
+      <button class="tab-btn active" data-view="monitoring">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+        Monitoring
+      </button>
+      <button class="tab-btn" data-view="career-feed">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Career Feed
+      </button>
+      <button class="tab-btn" data-view="architect">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/></svg>
+        Architect
+      </button>
+    </div>
+  </div>
 
-      .status-dot {
-        width: 5px;
-        height: 5px;
-        border-radius: 50%;
-        background-color: var(--accent-secondary);
-        animation: pulse-glow 2s infinite;
-      }
-
-      .status-text {
-        font-family: var(--font-mono);
-        font-size: 8px;
-        font-weight: 700;
-        color: var(--accent-secondary);
-        letter-spacing: 0.5px;
-      }
-
-      /* Sliding Capsule Navigation Menu */
-      .tabs-nav {
-        display: flex;
-        background: rgba(10, 15, 30, 0.7);
-        border: 1px solid var(--panel-border);
-        border-radius: 10px;
-        padding: 3px;
-        margin-bottom: 4px;
-        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
-        z-index: 1;
-      }
-
-      .tab-btn {
-        flex: 1;
-        background: transparent;
-        border: none;
-        color: var(--text-secondary);
-        font-family: var(--font-primary);
-        font-size: 11.5px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        padding: 8px 12px;
-        border-radius: 7px;
-        cursor: pointer;
-        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-        outline: none;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-      }
-
-      .tab-btn:hover {
-        color: #ffffff;
-      }
-
-      .tab-btn.active {
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(139, 92, 246, 0.12) 100%);
-        border: 1px solid rgba(139, 92, 246, 0.2);
-        color: #ffffff;
-        text-shadow: 0 0 8px rgba(139, 92, 246, 0.4);
-      }
-
-      .section-title-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 4px;
-        z-index: 1;
-      }
-
-      .section-title {
-        font-family: var(--font-mono);
-        font-size: 9.5px;
-        text-transform: uppercase;
-        color: var(--text-secondary);
-        font-weight: 700;
-        letter-spacing: 1px;
-        margin: 0;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .saved-count {
-        font-family: var(--font-mono);
-        font-size: 9.5px;
-        color: var(--accent-secondary);
-        font-weight: 700;
-        background: rgba(6, 182, 212, 0.08);
-        border: 1px solid rgba(6, 182, 212, 0.15);
-        padding: 2px 7px;
-        border-radius: 4px;
-      }
-
-      .search-list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        min-height: 100px;
-        z-index: 1;
-      }
-
-      /* Technical Modular Search Cards */
-      .search-card {
-        background: var(--card-bg);
-        border: 1px solid var(--card-border);
-        border-radius: 12px;
-        padding: 14px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-        position: relative;
-        overflow: hidden;
-      }
-
-      .search-card::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(90deg, rgba(6, 182, 212, 0.02), transparent);
-        opacity: 0;
-        transition: opacity 0.3s ease;
-        pointer-events: none;
-      }
-
-      .search-card:hover {
-        background: var(--card-hover);
-        border-color: rgba(99, 102, 241, 0.25);
-        transform: translateY(-2px);
-        box-shadow: 0 12px 20px -10px rgba(99, 102, 241, 0.3);
-      }
-
-      .search-card:hover::before {
-        opacity: 1;
-      }
-
-      .card-details {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex: 1;
-        min-width: 0;
-      }
-
-      .avatar {
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(6, 182, 212, 0.08) 100%);
-        border: 1px solid rgba(6, 182, 212, 0.2);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-family: var(--font-mono);
-        font-weight: 700;
-        color: var(--accent-secondary);
-        font-size: 14px;
-        flex-shrink: 0;
-        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.02);
-      }
-
-      .info {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        min-width: 0;
-      }
-
-      .company-name {
-        font-size: 13px;
-        font-weight: 700;
-        color: var(--text-primary);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        letter-spacing: -0.2px;
-      }
-
-      .search-url {
-        font-family: var(--font-mono);
-        font-size: 9px;
-        color: var(--text-secondary);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        text-decoration: none;
-        display: inline-block;
-        max-width: 175px;
-        transition: color 0.2s ease;
-        cursor: pointer;
-      }
-
-      .search-url:hover {
-        color: var(--accent-secondary);
-      }
-
-      .actions {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .btn {
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid rgba(255, 255, 255, 0.04);
-        width: 28px;
-        height: 28px;
-        border-radius: 7px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-        color: var(--text-secondary);
-      }
-
-      .btn-open:hover {
-        background: rgba(6, 182, 212, 0.1);
-        border-color: rgba(6, 182, 212, 0.3);
-        color: var(--accent-secondary);
-        box-shadow: 0 0 8px rgba(6, 182, 212, 0.15);
-      }
-
-      .btn-delete:hover {
-        background: var(--danger-bg);
-        border-color: rgba(244, 63, 94, 0.3);
-        color: var(--danger-color);
-        box-shadow: 0 0 8px rgba(244, 63, 94, 0.1);
-      }
-
-      /* Holographic Empty State Scanner */
-      .empty-state {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        padding: 42px 20px;
-        background: rgba(10, 15, 30, 0.4);
-        border: 1px solid rgba(255, 255, 255, 0.04);
-        border-radius: 16px;
-        margin-top: 4px;
-        position: relative;
-        overflow: hidden;
-      }
-
-      .empty-state::after {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(180deg, rgba(6, 182, 212, 0.02) 0%, transparent 100%);
-        pointer-events: none;
-      }
-
-      /* Custom scanner animation */
-      @keyframes scan-move {
-        0% { top: 10%; opacity: 0; }
-        50% { opacity: 0.8; }
-        100% { top: 90%; opacity: 0; }
-      }
-
-      .empty-icon {
-        display: none !important; /* Hide original simple document SVG icon */
-      }
-
-      /* Holographic radar container replacing AI document icon */
-      .radar-scanner {
-        position: relative;
-        width: 54px;
-        height: 54px;
-        margin-bottom: 18px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .radar-ring {
-        position: absolute;
-        width: 100%;
-        height: 100%;
-        border: 1.5px dashed rgba(6, 182, 212, 0.25);
-        border-radius: 50%;
-        animation: logo-spin 20s linear infinite;
-      }
-
-      .radar-ring-inner {
-        position: absolute;
-        width: 65%;
-        height: 65%;
-        border: 1px solid rgba(99, 102, 241, 0.2);
-        border-radius: 50%;
-        animation: logo-spin 10s linear infinite reverse;
-      }
-
-      .radar-beam {
-        position: absolute;
-        width: 100%;
-        height: 1.5px;
-        background: linear-gradient(90deg, transparent, var(--accent-secondary), transparent);
-        top: 50%;
-        animation: scan-move 3s ease-in-out infinite;
-        opacity: 0.7;
-      }
-
-      .empty-title {
-        font-family: var(--font-primary);
-        font-size: 13.5px;
-        font-weight: 700;
-        color: var(--text-primary);
-        margin-bottom: 5px;
-        letter-spacing: -0.2px;
-      }
-
-      .empty-desc {
-        font-family: var(--font-primary);
-        font-size: 11px;
-        color: var(--text-secondary);
-        line-height: 1.45;
-        max-width: 230px;
-        margin: 0;
-      }
-
-      /* Card slide removal transition animation */
-      .card-exit {
-        opacity: 0;
-        transform: scale(0.9) translateY(-10px);
-        margin-bottom: -50px;
-        pointer-events: none;
-      }
-
-      /* View Panels */
-      .view-panel {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        z-index: 1;
-      }
-      .view-panel.hidden {
-        display: none !important;
-      }
-
-      /* Form inputs redesign */
-      .profile-form {
-        display: flex;
-        flex-direction: column;
-        gap: 11px;
-      }
-      .form-group {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-      }
-      .form-group label {
-        font-family: var(--font-mono);
-        font-size: 8.5px;
-        color: var(--text-secondary);
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        padding-left: 2px;
-      }
-      .form-group input, .form-group textarea {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid var(--panel-border);
-        border-radius: 9px;
-        padding: 8px 11px;
-        color: var(--text-primary);
-        font-family: var(--font-primary);
-        font-size: 12px;
-        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-        outline: none;
-        box-sizing: border-box;
-        width: 100%;
-        resize: vertical;
-      }
-      .form-group input:focus, .form-group textarea:focus {
-        border-color: var(--accent-primary);
-        box-shadow: 0 0 10px rgba(99, 102, 241, 0.2);
-        background: rgba(255, 255, 255, 0.06);
-      }
-      .form-group textarea {
-        min-height: 52px;
-      }
-
-      /* Glowing tactical action buttons */
-      .btn-save {
-        width: 100%;
-        background: linear-gradient(135deg, var(--accent-primary) 0%, #4f46e5 100%);
-        border: none;
-        border-radius: 9px;
-        color: #ffffff;
-        font-family: var(--font-primary);
-        font-size: 12.5px;
-        font-weight: 700;
-        padding: 10px;
-        cursor: pointer;
-        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-        box-shadow: 0 4px 14px var(--accent-glow);
-        margin-top: 4px;
-        outline: none;
-        box-sizing: border-box;
-      }
-      .btn-save:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 18px rgba(99, 102, 241, 0.45);
-        background: linear-gradient(135deg, #8b5cf6 0%, var(--accent-primary) 100%);
-      }
-      .btn-save:active {
-        transform: translateY(0);
-      }
-
-      /* Premium Status Banner HUD */
-      .premium-banner {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        background: linear-gradient(135deg, rgba(245, 158, 11, 0.05) 0%, rgba(217, 119, 6, 0.05) 100%);
-        border: 1px solid rgba(245, 158, 11, 0.18);
-        border-radius: 10px;
-        padding: 9px 12px;
-        margin-bottom: 2px;
-      }
-      .premium-banner.active {
-        background: linear-gradient(135deg, rgba(6, 182, 212, 0.05) 0%, rgba(13, 148, 136, 0.05) 100%);
-        border-color: rgba(6, 182, 212, 0.25);
-        box-shadow: 0 0 10px rgba(6, 182, 212, 0.05);
-      }
-      .premium-status {
-        font-family: var(--font-mono);
-        font-size: 9px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        color: #f59e0b;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-      }
-      .premium-banner.active .premium-status {
-        color: var(--accent-secondary);
-      }
-      .btn-upgrade {
-        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-        color: #030712;
-        border: none;
-        font-family: var(--font-primary);
-        font-size: 10px;
-        font-weight: 800;
-        padding: 5px 10px;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: all 0.25s ease;
-        outline: none;
-        text-transform: uppercase;
-        letter-spacing: 0.2px;
-      }
-      .btn-upgrade:hover {
-        transform: translateY(-0.5px);
-        box-shadow: 0 4px 10px rgba(245, 158, 11, 0.35);
-      }
-    </style>
-  </head>
-  <body>
-    <div class="app-container">
-      <!-- Header HUD -->
-      <div class="header">
-        <div class="brand">
-          <div class="logo-icon">
-            <svg class="logo-svg" viewBox="0 0 24 24" fill="none" stroke="url(#cyber-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <defs>
-                <linearGradient id="cyber-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#8b5cf6" />
-                  <stop offset="100%" stop-color="#06b6d4" />
-                </linearGradient>
-              </defs>
-              <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
-              <polyline points="12 2 12 22" />
-              <polyline points="12 12 22 8.5" />
-              <polyline points="12 12 2 8.5" />
-            </svg>
-          </div>
-          <div class="brand-details">
-            <span class="brand-name">NEXTROLE</span>
-            <span class="brand-sub">// PORTAL.v1.0</span>
-          </div>
-        </div>
-        <div class="status-indicator">
-          <div class="status-dot"></div>
-          <span class="status-text">NODE: SECURE</span>
-        </div>
+  <!-- VIEW: MONITORING -->
+  <div id="view-monitoring" class="view active">
+    <!-- System Status -->
+    <div class="status-card">
+      <div class="status-left">
+        <div class="status-label">// SYSTEM ACTIVE</div>
+        <div class="status-name" id="user-display-name">Aagosh Raj Srivastava</div>
+        <a class="status-link" id="linkedin-link" href="#" target="_blank">∞ linkedin.com/in/aagoshraj...</a>
       </div>
+      <div class="status-dot"></div>
+    </div>
 
-      <!-- Navigation Tabs Selection HUD -->
-      <div class="tabs-nav">
-        <button class="tab-btn active" id="tab-tracked" data-view="tracked-view">Tracked Pages</button>
-        <button class="tab-btn" id="tab-profile" data-view="profile-view">My Profile</button>
+    <!-- Monitor Status Banner (shows when active) -->
+    <div class="monitor-status" id="monitor-status">
+      <div class="ms-dot"></div>
+      <span>MONITOR ACTIVE — scanning job boards</span>
+    </div>
+
+    <!-- Keyword / All Jobs segmented -->
+    <div class="seg">
+      <button class="seg-btn active" data-mode="keywords" id="seg-keywords">TRACK KEYWORDS</button>
+      <button class="seg-btn" data-mode="all" id="seg-all">TRACK ALL JOBS</button>
+    </div>
+
+    <!-- Targeted Monitoring header -->
+    <div class="section-hdr">
+      <span>⚡ TARGETED MONITORING</span>
+      <span class="slot-badge" id="slot-badge">0/10 SLOTS</span>
+    </div>
+
+    <!-- Roles / Titles -->
+    <div class="param-group" id="roles-group">
+      <div class="param-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        ROLES / TITLES
       </div>
-
-      <!-- VIEW 1: TRACKED PAGES PANEL -->
-      <div id="tracked-view" class="view-panel">
-        <div class="section-title-bar">
-          <h2 class="section-title">
-            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-              <line x1="9" y1="9" x2="15" y2="9"></line>
-              <line x1="9" y1="13" x2="15" y2="13"></line>
-              <line x1="9" y1="17" x2="15" y2="17"></line>
-            </svg>
-            SAVED CAREERS CHANNELS
-          </h2>
-          <span class="saved-count" id="saved-count">0 saved</span>
-        </div>
-        <div class="search-list" id="search-list">
-          <!-- Loaded dynamically via popup.ts -->
-        </div>
-      </div>
-
-      <!-- VIEW 2: MY RESUME PROFILE PANEL -->
-      <div id="profile-view" class="view-panel hidden">
-        <div class="premium-banner" id="premium-banner">
-          <span class="premium-status" id="premium-status">FREE ACCOUNT</span>
-          <button class="btn-upgrade" id="btn-upgrade">Upgrade ($15/mo)</button>
-        </div>
-        
-        <form class="profile-form" id="profile-form">
-          <div class="form-group">
-            <label for="prof-skills">Skills (comma-separated)</label>
-            <input type="text" id="prof-skills" placeholder="e.g. React, TypeScript, Node.js, PostgreSQL" required />
-          </div>
-          
-          <div class="form-group">
-            <label for="prof-experience">Work Experience</label>
-            <textarea id="prof-experience" placeholder="e.g. Senior Software Engineer at TechCo (2023-Pres): Lead team of 4 engineers, optimized database performance by 30%..." required></textarea>
-          </div>
-          
-          <div class="form-group">
-            <label for="prof-education">Education</label>
-            <textarea id="prof-education" placeholder="e.g. B.S. in Computer Science - University of Technology (2019-2023)" required></textarea>
-          </div>
-          
-          <div class="form-group">
-            <label for="prof-projects">Personal Projects</label>
-            <textarea id="prof-projects" placeholder="e.g. NextRole: Engineered micro-scraper serving desktop notifications..." required></textarea>
-          </div>
-          
-          <button type="submit" class="btn-save" id="btn-save-profile">Save Master Resume</button>
-        </form>
+      <div class="tags-wrap" id="roles-tags"></div>
+      <div class="tag-input-row">
+        <input id="roles-input" type="text" placeholder="Add role keyword..." />
+        <button id="roles-add">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        </button>
       </div>
     </div>
 
-    <script type="module" src="./popup.ts"></script>
-  </body>
+    <!-- Languages / Stack -->
+    <div class="param-group" id="stack-group">
+      <div class="param-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        LANGUAGES / STACK
+      </div>
+      <div class="tags-wrap" id="stack-tags"></div>
+      <div class="tag-input-row">
+        <input id="stack-input" type="text" placeholder="Add tech stack..." />
+        <button id="stack-add">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Location Preference -->
+    <div class="param-group">
+      <div class="param-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        LOCATION PREFERENCE
+      </div>
+      <div class="loc-wrap">
+        <select class="loc-select" id="location-select">
+          <option value="anywhere-india">Anywhere in India</option>
+          <option value="remote">Remote (Worldwide)</option>
+          <option value="bangalore">Bangalore, India</option>
+          <option value="mumbai">Mumbai, India</option>
+          <option value="delhi">Delhi / NCR, India</option>
+          <option value="hyderabad">Hyderabad, India</option>
+          <option value="pune">Pune, India</option>
+          <option value="us-remote">Remote (US)</option>
+          <option value="anywhere">Anywhere (Global)</option>
+        </select>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+    </div>
+
+    <!-- System Toggles -->
+    <div class="toggles-group">
+      <div class="toggle-row">
+        <div class="toggle-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Auto-Apply Filter
+        </div>
+        <div class="toggle-switch amber" id="toggle-autoapply" data-key="autoApply"></div>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          Instant Latency Alerts
+        </div>
+        <div class="toggle-switch on" id="toggle-alerts" data-key="instantAlerts"></div>
+      </div>
+    </div>
+
+    <!-- LAUNCH BUTTON -->
+    <button id="launch-btn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l-4 4 4 4M15 13l4-4-4-4M13 4l-2 16"/></svg>
+      LAUNCH MONITOR
+    </button>
+  </div>
+
+  <!-- VIEW: CAREER FEED -->
+  <div id="view-career-feed" class="view">
+    <div class="section-hdr">
+      <span>📡 SAVED CHANNELS</span>
+      <span class="slot-badge" id="channel-count">0 TRACKED</span>
+    </div>
+    <div id="channel-list">
+      <div class="empty-state">No channels tracked yet.<br/>Visit a job board and click Track.</div>
+    </div>
+  </div>
+
+  <!-- VIEW: ARCHITECT -->
+  <div id="view-architect" class="view">
+    <div class="section-hdr"><span>🧠 MASTER RESUME PROFILE</span></div>
+    <div class="form-group">
+      <label>Skills (comma-separated)</label>
+      <input type="text" id="prof-skills" placeholder="e.g. React, TypeScript, Node.js" />
+    </div>
+    <div class="form-group">
+      <label>Work Experience</label>
+      <textarea id="prof-experience" placeholder="e.g. SWE at Acme Corp (2023-Present): Led team of 4..."></textarea>
+    </div>
+    <div class="form-group">
+      <label>Education</label>
+      <textarea id="prof-education" placeholder="e.g. B.Tech CS — IIT Delhi (2020-2024)"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Personal Projects</label>
+      <textarea id="prof-projects" placeholder="e.g. NextRole: Built micro-scraper..."></textarea>
+    </div>
+    <button class="save-btn" id="save-profile-btn">SAVE MASTER RESUME</button>
+  </div>
+
+  <!-- STATUS BAR (always visible) -->
+  <div class="status-bar">
+    <span class="left">[SECURE SYSTEM] // CHANNELS ONLINE</span>
+    <div class="right">
+      <span id="latency-display">LATENCY: 24MS</span>
+      <span class="enc">🔒 ENCRYPTED</span>
+    </div>
+  </div>
+
+  <script type="module" src="./popup.ts"></script>
+</body>
 </html>
