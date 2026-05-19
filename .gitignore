@@ -39,3 +39,5 @@ jobtracker-backend/dist
 *.db
 *.sqlite
 
+
+/generated/prisma
