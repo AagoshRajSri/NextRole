@@ -389,6 +389,22 @@ async function injectSidePanel() {
       #nextrole-side-panel ::-webkit-scrollbar { width: 4px; }
       #nextrole-side-panel ::-webkit-scrollbar-track { background: transparent; }
       #nextrole-side-panel ::-webkit-scrollbar-thumb { background: rgba(0,240,255,0.15); border-radius: 4px; }
+      
+      .nr-form-group { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+      .nr-form-group label { font-family: var(--mono); font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+      .nr-input, .nr-textarea { background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border2); border-radius: 6px; padding: 6px 8px; color: var(--text); font-family: var(--font); font-size: 11px; outline: none; transition: border-color 0.2s ease; }
+      .nr-input:focus, .nr-textarea:focus { border-color: var(--cyan); box-shadow: 0 0 8px rgba(0, 240, 255, 0.15); }
+      .nr-textarea { resize: vertical; min-height: 50px; font-family: var(--mono); font-size: 9.5px; line-height: 1.4; }
+      
+      .nr-tag-container { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; min-height: 24px; padding: 4px; background: rgba(0, 0, 0, 0.15); border: 1px dashed var(--border2); border-radius: 6px; }
+      .nr-tag { display: inline-flex; align-items: center; gap: 4px; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 4px; padding: 2px 6px; font-family: var(--mono); font-size: 9px; color: var(--cyan); }
+      .nr-tag-del { cursor: pointer; color: var(--muted); font-weight: bold; transition: color 0.15s; }
+      .nr-tag-del:hover { color: #ff4a4a; }
+      .nr-tag-input { background: rgba(0,0,0,0.25); border: 1px solid var(--border2); border-radius: 6px; padding: 4px 8px; color: var(--text); font-family: var(--mono); font-size: 9.5px; outline: none; width: 100%; box-sizing: border-box; }
+      .nr-tag-input:focus { border-color: var(--cyan); }
+      
+      .nr-project-card { border: 1px solid var(--border2); border-radius: 8px; padding: 10px; background: var(--surface2); position: relative; margin-top: 8px; }
+      .nr-project-card .nr-close-btn { top: 4px; right: 4px; }
     </style>
 
     <div class="nr-hdr">
@@ -410,6 +426,10 @@ async function injectSidePanel() {
         <button class="nr-tab-btn" data-view="resume">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
           ATS Resume
+        </button>
+        <button class="nr-tab-btn" data-view="architect">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          Architect
         </button>
       </div>
     </div>
@@ -437,6 +457,66 @@ async function injectSidePanel() {
         <div id="nr-resume-container" style="transition: all 0.3s ease;">
           <div style="color: var(--muted); text-align: center; font-size: 11px; font-family: var(--mono);">[ SYNCING ATS... ]</div>
         </div>
+      </div>
+
+      <!-- View: Architect -->
+      <div id="nr-view-architect" class="nr-view">
+        <div class="nr-card">
+          <span class="nr-card-label">// IDENTITY & ACADEMICS</span>
+          <div class="nr-form-group">
+            <label>FULL NAME</label>
+            <input type="text" id="nr-profile-fullname" class="nr-input" placeholder="e.g. John Doe">
+          </div>
+          <div class="nr-form-group">
+            <label>UNIVERSITY</label>
+            <input type="text" id="nr-profile-institution" class="nr-input" placeholder="e.g. IIT Delhi">
+          </div>
+          <div class="nr-form-group">
+            <label>DEGREE</label>
+            <input type="text" id="nr-profile-degree" class="nr-input" placeholder="e.g. B.Tech">
+          </div>
+          <div class="nr-form-group">
+            <label>SPECIALIZATION</label>
+            <input type="text" id="nr-profile-specialization" class="nr-input" placeholder="e.g. Computer Science">
+          </div>
+          <div class="nr-form-group">
+            <label>GRADUATION YEAR</label>
+            <input type="text" id="nr-profile-gradyear" class="nr-input" placeholder="e.g. 2026">
+          </div>
+        </div>
+
+        <div class="nr-card">
+          <span class="nr-card-label">// SKILLS VECTOR MATRIX</span>
+          <div class="nr-form-group">
+            <label>LANGUAGES</label>
+            <div class="nr-tag-container" id="nr-tags-languages"></div>
+            <input type="text" id="nr-input-languages" class="nr-tag-input" placeholder="Add Language + Enter">
+          </div>
+          <div class="nr-form-group">
+            <label>FRAMEWORKS</label>
+            <div class="nr-tag-container" id="nr-tags-frameworks"></div>
+            <input type="text" id="nr-input-frameworks" class="nr-tag-input" placeholder="Add Framework + Enter">
+          </div>
+          <div class="nr-form-group">
+            <label>DATABASES</label>
+            <div class="nr-tag-container" id="nr-tags-databases"></div>
+            <input type="text" id="nr-input-databases" class="nr-tag-input" placeholder="Add Database + Enter">
+          </div>
+          <div class="nr-form-group">
+            <label>SPECIALIZED TECH</label>
+            <div class="nr-tag-container" id="nr-tags-specializedTech"></div>
+            <input type="text" id="nr-input-specializedTech" class="nr-tag-input" placeholder="Add Special Tech + Enter">
+          </div>
+        </div>
+
+        <div class="nr-card">
+          <span class="nr-card-label">// PROJECTS LEDGER</span>
+          <div id="nr-projects-container" style="display: flex; flex-direction: column; gap: 8px;"></div>
+          <button id="nr-btn-add-project" class="nr-feed-btn" style="text-align: center; margin-top: 8px;">+ ADD PROJECT INSTANCE</button>
+        </div>
+
+        <button id="nr-btn-save-profile" class="nr-feed-btn" style="text-align: center; margin-top: 8px; border-color: var(--cyan); background: rgba(0, 240, 255, 0.1); color: var(--cyan); font-weight: bold; width: 100%; height: 32px; display: flex; align-items: center; justify-content: center;">// COMMIT MASTER SYSTEM MATRIX</button>
+        <div id="nr-profile-save-status" style="font-family: var(--mono); font-size: 8px; color: var(--muted); text-align: center; margin-top: 4px;">[ STATUS: INITIALIZED ]</div>
       </div>
       
       <div class="nr-footer">
@@ -525,6 +605,7 @@ async function injectSidePanel() {
 
   // 4. Load dynamic features & state
   await updatePanelData(panel, currentUrl, company);
+  await initArchitectProfile(panel);
 }
 
 async function updatePanelData(panel: HTMLElement, currentUrl: string, company: string) {
@@ -1097,4 +1178,256 @@ async function renderCareerFeed(panel: HTMLElement) {
     console.warn('[NextRole] Feed render failed:', err);
     feedContainer.innerHTML = `<div class="terminal-alert">// FEED RENDER ERROR - RETRYING...</div>`;
   }
+}
+
+
+// ----------------------------------------------------
+// ARCHITECT PROFILE STORAGE MATRIX & INTERACTIVE CONTROLLERS
+// ----------------------------------------------------
+
+interface MasterProfile {
+  fullName: string;
+  education: {
+    institution: string;
+    degree: string;
+    specialization: string;
+    graduationYear: string;
+  };
+  skills: {
+    languages: string[];
+    frameworks: string[];
+    databases: string[];
+    specializedTech: string[];
+  };
+  coreProjects: Array<{
+    name: string;
+    description: string;
+    techStack: string[];
+  }>;
+}
+
+function sanitizeString(str: string): string {
+  if (!str) return '';
+  return str.replace(/<script[^>]*>([\S\s]*?)<\/script>/gi, '')
+            .replace(/<\/?[^>]+(>|$)/g, '');
+}
+
+async function initArchitectProfile(panel: HTMLElement) {
+  let profile: MasterProfile = {
+    fullName: '',
+    education: { institution: '', degree: '', specialization: '', graduationYear: '' },
+    skills: { languages: [], frameworks: [], databases: [], specializedTech: [] },
+    coreProjects: []
+  };
+
+  // Load from storage
+  try {
+    const storage = await browser.storage.local.get('masterProfile') as any;
+    if (storage.masterProfile) {
+      profile = storage.masterProfile;
+    }
+  } catch (e) {
+    console.warn('[NextRole] Error reading masterProfile:', e);
+  }
+
+  // Bind values
+  const nameInput = panel.querySelector('#nr-profile-fullname') as HTMLInputElement;
+  const instInput = panel.querySelector('#nr-profile-institution') as HTMLInputElement;
+  const degInput = panel.querySelector('#nr-profile-degree') as HTMLInputElement;
+  const specInput = panel.querySelector('#nr-profile-specialization') as HTMLInputElement;
+  const gradInput = panel.querySelector('#nr-profile-gradyear') as HTMLInputElement;
+  const saveStatus = panel.querySelector('#nr-profile-save-status') as HTMLElement;
+  const commitBtn = panel.querySelector('#nr-btn-save-profile') as HTMLButtonElement;
+
+  if (nameInput) nameInput.value = profile.fullName || '';
+  if (instInput) instInput.value = profile.education?.institution || '';
+  if (degInput) degInput.value = profile.education?.degree || '';
+  if (specInput) specInput.value = profile.education?.specialization || '';
+  if (gradInput) gradInput.value = profile.education?.graduationYear || '';
+
+  // Render Skill Tags
+  const categories = ['languages', 'frameworks', 'databases', 'specializedTech'] as const;
+  categories.forEach(cat => {
+    renderTags(cat);
+    setupTagInput(cat);
+  });
+
+  // Render Projects
+  renderProjects();
+
+  // Setup Add Project button
+  const addProjBtn = panel.querySelector('#nr-btn-add-project');
+  addProjBtn?.addEventListener('click', () => {
+    if (!profile.coreProjects) profile.coreProjects = [];
+    profile.coreProjects.push({ name: '', description: '', techStack: [] });
+    renderProjects();
+    triggerSave(true);
+  });
+
+  // Dynamic Tags rendering helper
+  function renderTags(cat: typeof categories[number]) {
+    const container = panel.querySelector(`#nr-tags-${cat}`);
+    if (!container) return;
+    const tagList = profile.skills[cat] || [];
+    container.innerHTML = tagList.map((tag, idx) => `
+      <span class="nr-tag" data-category="${cat}" data-index="${idx}">
+        ${escapeHtml(tag)}
+        <span class="nr-tag-del" data-category="${cat}" data-index="${idx}">×</span>
+      </span>
+    `).join('');
+
+    // Setup delete listeners
+    container.querySelectorAll('.nr-tag-del').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const index = parseInt((e.currentTarget as HTMLElement).dataset.index || '0', 10);
+        profile.skills[cat].splice(index, 1);
+        renderTags(cat);
+        triggerSave(true);
+      });
+    });
+  }
+
+  // Setup Skill inputs
+  function setupTagInput(cat: typeof categories[number]) {
+    const input = panel.querySelector(`#nr-input-${cat}`) as HTMLInputElement;
+    if (!input) return;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        const val = sanitizeString(input.value.trim());
+        if (val) {
+          if (!profile.skills[cat]) profile.skills[cat] = [];
+          if (!profile.skills[cat].includes(val)) {
+            profile.skills[cat].push(val);
+          }
+          input.value = '';
+          renderTags(cat);
+          triggerSave(true);
+        }
+      }
+    });
+  }
+
+  // Dynamic Projects rendering helper
+  function renderProjects() {
+    const container = panel.querySelector('#nr-projects-container');
+    if (!container) return;
+    const projectList = profile.coreProjects || [];
+    container.innerHTML = projectList.map((p, idx) => `
+      <div class="nr-project-card" data-index="${idx}">
+        <button class="nr-close-btn nr-del-project-btn" data-index="${idx}" style="top: 6px; right: 6px; position: absolute; background: none; border: none; color: var(--muted); cursor: pointer;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+        <div class="nr-form-group">
+          <label>PROJECT NAME</label>
+          <input type="text" class="nr-input nr-project-name" data-index="${idx}" value="${escapeHtml(p.name || '')}" placeholder="e.g. NextRole Core Engine">
+        </div>
+        <div class="nr-form-group">
+          <label>TECH STACK (COMMA SEPARATED)</label>
+          <input type="text" class="nr-input nr-project-tech" data-index="${idx}" value="${escapeHtml((p.techStack || []).join(', '))}" placeholder="e.g. React, Node.js, WebSockets">
+        </div>
+        <div class="nr-form-group">
+          <label>TECHNICAL DESCRIPTION</label>
+          <textarea class="nr-textarea nr-project-desc" data-index="${idx}" placeholder="Deep bullet points on system design/performance...">${escapeHtml(p.description || '')}</textarea>
+        </div>
+      </div>
+    `).join('');
+
+    // Setup input listeners on project cards
+    container.querySelectorAll('.nr-project-name').forEach(input => {
+      input.addEventListener('input', (e) => {
+        const idx = parseInt((e.target as HTMLInputElement).dataset.index || '0', 10);
+        profile.coreProjects[idx].name = sanitizeString((e.target as HTMLInputElement).value);
+        triggerSave(false);
+      });
+    });
+
+    container.querySelectorAll('.nr-project-tech').forEach(input => {
+      input.addEventListener('input', (e) => {
+        const idx = parseInt((e.target as HTMLInputElement).dataset.index || '0', 10);
+        profile.coreProjects[idx].techStack = (e.target as HTMLInputElement).value
+          .split(',')
+          .map(t => sanitizeString(t.trim()))
+          .filter(t => t);
+        triggerSave(false);
+      });
+    });
+
+    container.querySelectorAll('.nr-project-desc').forEach(textarea => {
+      textarea.addEventListener('input', (e) => {
+        const idx = parseInt((e.target as HTMLTextAreaElement).dataset.index || '0', 10);
+        profile.coreProjects[idx].description = sanitizeString((e.target as HTMLTextAreaElement).value);
+        triggerSave(false);
+      });
+    });
+
+    // Delete project listeners
+    container.querySelectorAll('.nr-del-project-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const idx = parseInt((e.currentTarget as HTMLElement).dataset.index || '0', 10);
+        profile.coreProjects.splice(idx, 1);
+        renderProjects();
+        triggerSave(true);
+      });
+    });
+  }
+
+  // Input listeners on main fields
+  [nameInput, instInput, degInput, specInput, gradInput].forEach(el => {
+    el?.addEventListener('input', () => {
+      profile.fullName = sanitizeString(nameInput?.value || '');
+      profile.education = {
+        institution: sanitizeString(instInput?.value || ''),
+        degree: sanitizeString(degInput?.value || ''),
+        specialization: sanitizeString(specInput?.value || ''),
+        graduationYear: sanitizeString(gradInput?.value || '')
+      };
+      triggerSave(false);
+    });
+  });
+
+  // Debounced auto-save (300ms)
+  let saveTimeout: any;
+  function triggerSave(immediate = false) {
+    if (saveStatus) saveStatus.textContent = '[ STATUS: WRITING... ]';
+    if (saveTimeout) clearTimeout(saveTimeout);
+    
+    if (immediate) {
+      saveProfile();
+    } else {
+      saveTimeout = setTimeout(saveProfile, 300);
+    }
+  }
+
+  async function saveProfile() {
+    try {
+      await browser.storage.local.set({ masterProfile: profile });
+      if (saveStatus) saveStatus.textContent = '[ STATUS: DATA SYNCED ]';
+      
+      // Fire update alert broadcast
+      if (typeof browser !== 'undefined' && browser.runtime?.id) {
+        browser.runtime.sendMessage({ action: "MASTER_PROFILE_MUTATED" }).catch(() => {});
+      }
+    } catch (e) {
+      console.error('[NextRole] Auto-save profile failed:', e);
+      if (saveStatus) saveStatus.textContent = '[ STATUS: SYNC ERROR ]';
+    }
+  }
+
+  // Save button action
+  commitBtn?.addEventListener('click', async () => {
+    commitBtn.style.borderColor = '#00c851';
+    commitBtn.style.color = '#00c851';
+    commitBtn.style.background = 'rgba(0, 200, 81, 0.1)';
+    commitBtn.textContent = '// SYSTEM MATRIX MUTATED';
+    
+    await saveProfile();
+
+    setTimeout(() => {
+      commitBtn.style.borderColor = 'var(--cyan)';
+      commitBtn.style.color = 'var(--cyan)';
+      commitBtn.style.background = 'rgba(0, 240, 255, 0.1)';
+      commitBtn.textContent = '// COMMIT MASTER SYSTEM MATRIX';
+    }, 2000);
+  });
 }
