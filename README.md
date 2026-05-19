@@ -1,7 +1,6 @@
 # ⚡ NextRole — Never Miss Out⚡
 
 <div align="center">
-  <img src="./assets/icon.png" alt="NextRole Banner" width="128" style="border-radius: 20px; margin-bottom: 15px;" onError="this.style.display='none'" />
   <p><strong>A high-fidelity, autonomous ATS scraping co-pilot and real-time career monitoring terminal.</strong></p>
 
   [![WXT](https://img.shields.io/badge/Extension-WXT_MV3-00f0ff?style=for-the-badge&logo=googlechrome&logoColor=white)](https://wxt.dev/)
