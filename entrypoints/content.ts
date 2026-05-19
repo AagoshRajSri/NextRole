@@ -630,7 +630,6 @@ async function updatePanelData(panel: HTMLElement, currentUrl: string, company: 
     console.error('[NextRole] Fatal error in updatePanelData:', err);
   }
 }
-}
 
 function injectFloatingTrigger() {
   if (document.getElementById('nextrole-side-trigger')) {
