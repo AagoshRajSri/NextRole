@@ -875,11 +875,11 @@ let linkedInObserver: MutationObserver | null = null;
 const seenJobIds = new Set<string>();
 
 const INDIAN_METRO_MAP: Record<string, string[]> = {
-  "delhi / ncr": ["delhi", "ncr", "gurgaon", "gurugram", "noida", "ghaziabad", "faridabad"],
-  "bengaluru": ["bengaluru", "bangalore", "electronic city", "whitefield"],
-  "hyderabad": ["hyderabad", "secunderabad", "telangana"],
-  "mumbai / pune": ["mumbai", "pune", "thane", "navi mumbai", "maharashtra"],
-  "chennai": ["chennai", "madras", "tamil nadu"]
+  "delhi / ncr": ["delhi", "ncr", "gurgaon", "gurugram", "noida", "ghaziabad", "faridabad", "haryana", "uttar pradesh"],
+  "bengaluru": ["bengaluru", "bangalore", "electronic city", "whitefield", "karnataka"],
+  "hyderabad": ["hyderabad", "secunderabad", "gachibowli", "hitech city", "telangana"],
+  "mumbai / pune": ["mumbai", "pune", "thane", "navi mumbai", "hinjewadi", "maharashtra"],
+  "chennai": ["chennai", "madras", "siruseri", "omr", "tamil nadu"]
 };
 
 function escapeRegex(string: string): string {
@@ -912,23 +912,28 @@ async function evaluateJobLocally(scrapedJob: { title: string; company: string; 
     }
 
     // STEP B: Indian Multi-Location Heuristic
-    const normLoc = scrapedJob.location.toLowerCase();
     let locationPassed = false;
-
-    if (normLoc.includes('remote')) {
-      locationPassed = true;
-    } else if (targetLocations && targetLocations.length > 0) {
-      for (const targetLoc of targetLocations) {
-        const key = targetLoc.toLowerCase();
-        const aliases = INDIAN_METRO_MAP[key] || [key];
-        if (aliases.some(alias => normLoc.includes(alias))) {
-          locationPassed = true;
-          break;
+    try {
+      const normLoc = (scrapedJob.location || '').toLowerCase().trim();
+      
+      if (normLoc.includes('remote') || normLoc.includes('work from home')) {
+        locationPassed = true;
+      } else if (targetLocations && targetLocations.length > 0) {
+        for (const targetLoc of targetLocations) {
+          const key = targetLoc.toLowerCase().trim();
+          const aliases = INDIAN_METRO_MAP[key] || [key];
+          if (aliases.some(alias => normLoc.includes(alias.toLowerCase().trim()))) {
+            locationPassed = true;
+            break;
+          }
         }
+      } else {
+        // If no locations are selected, default to pass all locations (no strict local city constraints applied)
+        locationPassed = true;
       }
-    } else {
-      // If no locations are selected, default to pass
-      locationPassed = true;
+    } catch (locErr) {
+      console.warn('[NextRole] Location heuristic matching error:', locErr);
+      locationPassed = false;
     }
 
     if (!locationPassed) return null;
