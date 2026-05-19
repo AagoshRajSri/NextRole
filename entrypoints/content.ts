@@ -101,6 +101,9 @@ function safeSetDismissedState(isDismissed: boolean) {
 
 async function handleDetection(retryCount = 0) {
   const isCareerPage = detectCareerPage();
+  
+  // Start the background list scraper safely
+  startLinkedInScraper();
 
   if (isCareerPage) {
     const company = getCompanyName();
@@ -363,6 +366,11 @@ async function injectSidePanel() {
       .nr-card-label { font-family: var(--mono); font-size: 8px; font-weight: 700; text-transform: uppercase; color: var(--cyan); letter-spacing: 0.8px; }
       .nr-card-title { font-size: 13.5px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; }
       
+      .time-filter-row { display: flex; gap: 8px; margin-top: 8px; }
+      .time-btn { flex: 1; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border2); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 700; padding: 6px; cursor: pointer; transition: all 0.2s ease; outline: none; }
+      .time-btn.active { background: rgba(0, 240, 255, 0.1); border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 10px rgba(0, 240, 255, 0.1); }
+      .time-btn:not(.active):hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+      
       .nr-footer { margin-top: auto; border-top: 1px solid var(--border2); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--muted); font-family: var(--mono); background: var(--surface); }
       
       /* Scrollbar */
@@ -400,6 +408,12 @@ async function injectSidePanel() {
         <div class="nr-card">
           <span class="nr-card-label">// CAREER FEED ACTIVE</span>
           <div class="nr-card-title"><span>🏢</span> <span id="nr-company-display" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px;">${company}</span></div>
+          <div style="margin-top: 6px; font-family: var(--mono); font-size: 8px; color: var(--muted);">// TIME HORIZON FILTER</div>
+          <div class="time-filter-row">
+            <button class="time-btn active" data-range="today">TODAY</button>
+            <button class="time-btn" data-range="week">THIS WEEK</button>
+            <button class="time-btn" data-range="all">ALL TIME</button>
+          </div>
         </div>
         <div id="nr-action-container" style="transition: all 0.3s ease;">
           <div style="color: var(--muted); text-align: center; font-size: 11px; font-family: var(--mono);">[ CONNECTING TO DATABASE NODE... ]</div>
@@ -465,6 +479,20 @@ async function injectSidePanel() {
       panel.querySelectorAll('.nr-view').forEach(v => v.classList.remove('active'));
       const targetView = panel.querySelector(`#nr-view-${viewId}`);
       if (targetView) targetView.classList.add('active');
+    });
+  });
+
+  // 3.6 Time Filter Logic
+  panel.querySelectorAll('.time-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      panel.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+      (e.currentTarget as HTMLElement).classList.add('active');
+      const range = (e.currentTarget as HTMLElement).dataset.range || 'all';
+      
+      if (typeof browser !== 'undefined' && browser.storage?.local) {
+        await browser.storage.local.set({ timeHorizonFilter: range });
+        console.log(`[NextRole] Time Horizon Filter set to: ${range}`);
+      }
     });
   });
 
@@ -813,4 +841,92 @@ function escapeHtml(unsafe: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+// ----------------------------------------------------
+// LINKEDIN VIRTUAL LIST SCRAPER & STREAMING PIPELINE
+// ----------------------------------------------------
+
+let linkedInObserver: MutationObserver | null = null;
+const seenJobIds = new Set<string>();
+
+function startLinkedInScraper() {
+  if (linkedInObserver) return; // Already running
+  
+  // Only activate on LinkedIn search pages
+  if (!window.location.href.includes('linkedin.com/jobs/search')) return;
+
+  const targetNode = document.body;
+  
+  linkedInObserver = new MutationObserver(() => {
+    // LinkedIn changes class names occasionally, so we target the list containers robustly
+    const listItems = document.querySelectorAll('.scaffold-layout__list-item, .jobs-search-results__list li');
+    if (!listItems.length) return;
+
+    listItems.forEach(item => {
+      try {
+        const titleEl = item.querySelector('.job-card-list__title') as HTMLElement;
+        const companyEl = item.querySelector('.job-card-list__company-name') as HTMLElement;
+        const timeEl = item.querySelector('.job-card-container__metadata-item--secondary, time') as HTMLElement;
+        const linkEl = item.querySelector('a.job-card-list__title') as HTMLAnchorElement;
+        
+        if (!titleEl || !companyEl) return;
+        
+        const title = titleEl.textContent?.trim() || '';
+        const company = companyEl.textContent?.trim() || '';
+        const timeStr = timeEl?.textContent?.trim() || '';
+        const url = linkEl?.href || window.location.href;
+        
+        // Generate a stable ID to prevent duplicates
+        const jobIdMatch = url.match(/view\/(\d+)/);
+        const jobId = jobIdMatch ? jobIdMatch[1] : `${title}-${company}`;
+        
+        if (seenJobIds.has(jobId)) return;
+        seenJobIds.add(jobId);
+
+        // Map Time Horizon
+        let timeHorizon = 'all';
+        const ts = timeStr.toLowerCase();
+        if (ts.includes('hour') || ts.includes('minute') || ts.includes('just now')) {
+          timeHorizon = 'today';
+        } else if (ts.includes('day')) {
+          const days = parseInt(ts.replace(/\D/g, ''), 10);
+          if (!isNaN(days) && days <= 7) timeHorizon = 'week';
+        }
+
+        evaluateJobPayload({ id: jobId, title, company, timeHorizon, url, rawTime: timeStr });
+      } catch (err) {
+        // Fail silently for individual nodes to prevent infinite scroll crashing
+      }
+    });
+  });
+
+  linkedInObserver.observe(targetNode, { childList: true, subtree: true });
+}
+
+async function evaluateJobPayload(job: { id: string, title: string, company: string, timeHorizon: string, url: string, rawTime: string }) {
+  try {
+    const storage = (await browser.storage.local.get(['targetRoles', 'timeHorizonFilter'])) as any;
+    const activeRoles = storage.targetRoles || ['Security', 'Cyber', 'AppSec'];
+    const activeTimeFilter = storage.timeHorizonFilter || 'all'; // 'today', 'week', 'all'
+
+    // 1. Time Filter Gate
+    if (activeTimeFilter === 'today' && job.timeHorizon !== 'today') return;
+    if (activeTimeFilter === 'week' && (job.timeHorizon !== 'today' && job.timeHorizon !== 'week')) return;
+
+    // 2. Keyword Gate
+    const targetString = `${job.title} ${job.company}`.toLowerCase();
+    const isMatch = activeRoles.some((role: string) => targetString.includes(role.toLowerCase()));
+
+    if (isMatch) {
+      console.log(`[NextRole] ⚡ High-Signal Match: ${job.title} at ${job.company} (${job.rawTime})`);
+      
+      // Send payload to background engine to populate the database and feed
+      if (typeof browser !== 'undefined' && browser.runtime?.id) {
+        browser.runtime.sendMessage({ action: "UPDATE_CAREER_FEED", job }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn('[NextRole] Job evaluation failed:', err);
+  }
 }
