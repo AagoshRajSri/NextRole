@@ -582,8 +582,9 @@ async function injectSidePanel() {
       const range = (e.currentTarget as HTMLElement).dataset.range || 'all';
       
       if (typeof browser !== 'undefined' && browser.storage?.local) {
-        await browser.storage.local.set({ timeHorizonFilter: range });
+        await browser.storage.local.set({ activeTimeHorizon: range });
         console.log(`[NextRole] Time Horizon Filter set to: ${range}`);
+        clearDecorations();
         renderCareerFeed(panel); // Re-render feed immediately on filter change
       }
     });
@@ -597,7 +598,8 @@ async function injectSidePanel() {
 
   // Listen for REFRESH_HUD_FEED from background storage broker
   browser.runtime.onMessage.addListener((msg: any) => {
-    if (msg.action === 'REFRESH_HUD_FEED') {
+    if (msg.action === 'REFRESH_HUD_FEED' || msg.action === 'MASTER_PROFILE_MUTATED') {
+      clearDecorations();
       const livePanel = document.getElementById('nextrole-side-panel');
       if (livePanel) renderCareerFeed(livePanel);
     }
@@ -1108,7 +1110,11 @@ function startLinkedInScraper() {
         const location = locEl?.textContent?.trim() || '';
         const url = linkEl?.href || window.location.href;
 
-        evaluateJobLocally({ title, company, location, rawTime, url });
+        evaluateJobLocally({ title, company, location, rawTime, url }).then(passedJob => {
+          if (passedJob) {
+            decorateCard(item as HTMLElement, passedJob);
+          }
+        });
       } catch (err) {
         // Fail silently for individual nodes to prevent infinite scroll crashing
       }
@@ -1429,5 +1435,100 @@ async function initArchitectProfile(panel: HTMLElement) {
       commitBtn.style.background = 'rgba(0, 240, 255, 0.1)';
       commitBtn.textContent = '// COMMIT MASTER SYSTEM MATRIX';
     }, 2000);
+  });
+}
+
+
+// ----------------------------------------------------
+// NATIVE DOM DECORATOR & SKILL HIGHLIGHTING OVERLAY
+// ----------------------------------------------------
+
+function clearDecorations() {
+  document.querySelectorAll('.nextrole-decorated').forEach(item => {
+    const htmlItem = item as HTMLElement;
+    htmlItem.style.borderLeft = '';
+    htmlItem.style.background = '';
+    htmlItem.classList.remove('nextrole-decorated');
+    
+    htmlItem.querySelector('.nextrole-match-badge')?.remove();
+    htmlItem.querySelector('.nextrole-skills-wrapper')?.remove();
+  });
+}
+
+async function decorateCard(item: HTMLElement, passedJob: any) {
+  try {
+    if (item.classList.contains('nextrole-decorated')) return;
+    item.classList.add('nextrole-decorated');
+
+    item.style.borderLeft = '4px solid #00ffcc';
+    item.style.background = 'rgba(0, 255, 204, 0.03)';
+
+    const titleEl = item.querySelector('.job-card-list__title') as HTMLElement;
+    if (titleEl && !titleEl.querySelector('.nextrole-match-badge')) {
+      const badge = document.createElement('span');
+      badge.className = 'nextrole-match-badge';
+      badge.style.color = '#00ffcc';
+      badge.style.fontFamily = 'monospace';
+      badge.style.fontSize = '10px';
+      badge.style.marginLeft = '8px';
+      badge.style.display = 'inline-block';
+      badge.textContent = '[⚡ TARGET ALIGNED]';
+      titleEl.appendChild(badge);
+    }
+
+    const storage = await browser.storage.local.get('masterProfile') as any;
+    const profile = storage.masterProfile as MasterProfile;
+    if (profile && profile.skills) {
+      const allSkills: string[] = [];
+      const skillsObj = profile.skills;
+      if (skillsObj.languages) allSkills.push(...skillsObj.languages);
+      if (skillsObj.frameworks) allSkills.push(...skillsObj.frameworks);
+      if (skillsObj.databases) allSkills.push(...skillsObj.databases);
+      if (skillsObj.specializedTech) allSkills.push(...skillsObj.specializedTech);
+
+      const cardText = item.innerText.toLowerCase();
+      const matchedSkills = allSkills.filter(skill => {
+        const trimmed = skill.trim();
+        if (!trimmed) return false;
+        const escSkill = trimmed.replace(/[\\/\\-\\^\\$*+?.()|[\]{}]/g, '\\\\$&');
+        let pattern = escSkill;
+        if (/^[a-zA-Z0-9]/.test(trimmed)) {
+          pattern = '\\\\b' + pattern;
+        }
+        if (/[a-zA-Z0-9]$/.test(trimmed)) {
+          pattern = pattern + '\\\\b';
+        }
+        const regex = new RegExp(pattern, 'i');
+        return regex.test(cardText);
+      });
+
+      if (matchedSkills.length > 0) {
+        let wrapper = item.querySelector('.nextrole-skills-wrapper') as HTMLElement;
+        if (!wrapper) {
+          wrapper = document.createElement('div');
+          wrapper.className = 'nextrole-skills-wrapper';
+          wrapper.style.display = 'flex';
+          wrapper.style.flexWrap = 'wrap';
+          wrapper.style.gap = '4px';
+          wrapper.style.marginTop = '8px';
+          wrapper.style.padding = '2px 0';
+          item.appendChild(wrapper);
+        }
+
+        wrapper.innerHTML = matchedSkills.map(skill => {
+          return '<span class="nextrole-skill-pill" style="background: #111; color: #fff; border: 1px solid #333; padding: 2px 6px; font-size: 10px; border-radius: 4px; margin-right: 4px; font-family: monospace;">' + escapeHtml(skill) + '</span>';
+        }).join('');
+      }
+    }
+  } catch (err) {
+    console.warn('[NextRole] DOM card decoration failed:', err);
+  }
+}
+
+if (typeof browser !== 'undefined' && browser.storage?.onChanged) {
+  browser.storage.onChanged.addListener((changes: any) => {
+    if (changes.targetRoles || changes.targetLocations || changes.activeTimeHorizon || changes.masterProfile) {
+      clearDecorations();
+    }
   });
 }
