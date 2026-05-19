@@ -187,6 +187,51 @@ export default defineBackground(() => {
       });
       return true;
     }
+
+    // ── Career Feed Storage Broker ─────────────────────────
+    if (message.action === 'UPDATE_CAREER_FEED') {
+      const incomingJob = message.job;
+      if (!incomingJob?.title || !incomingJob?.company) {
+        sendResponse({ success: false, error: 'Invalid job payload' });
+        return true;
+      }
+
+      (async () => {
+        try {
+          const stored = (await browser.storage.local.get('scrapedJobs')) as any;
+          const existingJobs: any[] = stored.scrapedJobs || [];
+
+          // Deduplicate by title + company signature
+          const signature = `${incomingJob.title.toLowerCase()}::${incomingJob.company.toLowerCase()}`;
+          const isDuplicate = existingJobs.some(j =>
+            `${j.title?.toLowerCase()}::${j.company?.toLowerCase()}` === signature
+          );
+
+          if (!isDuplicate) {
+            // Prepend newest to front, cap at 100 entries
+            const updatedJobs = [incomingJob, ...existingJobs].slice(0, 100);
+            await browser.storage.local.set({ scrapedJobs: updatedJobs });
+            console.log(`[Background] ✅ Career Feed updated: "${incomingJob.title}" at "${incomingJob.company}"`);
+
+            // Broadcast refresh signal to all active content scripts
+            const tabs = await browser.tabs.query({ active: true });
+            for (const tab of tabs) {
+              if (tab.id) {
+                browser.tabs.sendMessage(tab.id, { action: 'REFRESH_HUD_FEED' }).catch(() => {});
+              }
+            }
+          } else {
+            console.log(`[Background] ⏭️ Duplicate skipped: "${incomingJob.title}"`);
+          }
+
+          sendResponse({ success: true });
+        } catch (err: any) {
+          console.error('[Background] Career Feed storage broker error:', err);
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true; // Keep channel open for async sendResponse
+    }
   });
 
   // Override pollForNewJobs to respect keyword config

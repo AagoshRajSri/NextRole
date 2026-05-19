@@ -370,6 +370,18 @@ async function injectSidePanel() {
       .time-btn { flex: 1; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border2); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 700; padding: 6px; cursor: pointer; transition: all 0.2s ease; outline: none; }
       .time-btn.active { background: rgba(0, 240, 255, 0.1); border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 10px rgba(0, 240, 255, 0.1); }
       .time-btn:not(.active):hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+
+      .nr-feed-list { display: flex; flex-direction: column; gap: 8px; }
+      .nr-feed-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; transition: border-color 0.2s ease; }
+      .nr-feed-card:hover { border-color: rgba(0, 240, 255, 0.3); }
+      .nr-feed-card-title { font-size: 12px; font-weight: 700; color: var(--text); line-height: 1.3; }
+      .nr-feed-card-meta { font-size: 10px; color: var(--muted); font-family: var(--mono); display: flex; flex-wrap: wrap; gap: 6px; }
+      .nr-feed-card-tag { display: inline-flex; align-items: center; gap: 3px; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.15); border-radius: 4px; padding: 2px 6px; font-family: var(--mono); font-size: 8px; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.5px; }
+      .nr-feed-card-tag.today { background: rgba(240, 255, 0, 0.08); border-color: rgba(240, 255, 0, 0.2); color: var(--yellow); }
+      .nr-feed-card-tag.week { background: rgba(0, 240, 120, 0.08); border-color: rgba(0, 240, 120, 0.2); color: #00f078; }
+      .nr-feed-btn { margin-top: 2px; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 6px; color: var(--cyan); font-family: var(--mono); font-size: 9px; font-weight: 700; padding: 5px 10px; cursor: pointer; transition: all 0.2s ease; text-align: left; outline: none; letter-spacing: 0.5px; }
+      .nr-feed-btn:hover { background: rgba(0, 240, 255, 0.15); border-color: var(--cyan); box-shadow: 0 0 10px rgba(0, 240, 255, 0.2); }
+      .terminal-alert { font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: center; padding: 24px 12px; border: 1px dashed var(--border2); border-radius: 8px; line-height: 1.6; }
       
       .nr-footer { margin-top: auto; border-top: 1px solid var(--border2); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--muted); font-family: var(--mono); background: var(--surface); }
       
@@ -416,7 +428,7 @@ async function injectSidePanel() {
           </div>
         </div>
         <div id="nr-action-container" style="transition: all 0.3s ease;">
-          <div style="color: var(--muted); text-align: center; font-size: 11px; font-family: var(--mono);">[ CONNECTING TO DATABASE NODE... ]</div>
+          <div id="nr-feed-list" class="nr-feed-list"><div class="terminal-alert">// INITIALIZING FEED MATRIX...</div></div>
         </div>
       </div>
 
@@ -492,12 +504,24 @@ async function injectSidePanel() {
       if (typeof browser !== 'undefined' && browser.storage?.local) {
         await browser.storage.local.set({ timeHorizonFilter: range });
         console.log(`[NextRole] Time Horizon Filter set to: ${range}`);
+        renderCareerFeed(panel); // Re-render feed immediately on filter change
       }
     });
   });
 
   // Append Side Panel
   document.body.appendChild(panel);
+
+  // Trigger initial feed render after DOM is mounted
+  requestAnimationFrame(() => renderCareerFeed(panel));
+
+  // Listen for REFRESH_HUD_FEED from background storage broker
+  browser.runtime.onMessage.addListener((msg: any) => {
+    if (msg.action === 'REFRESH_HUD_FEED') {
+      const livePanel = document.getElementById('nextrole-side-panel');
+      if (livePanel) renderCareerFeed(livePanel);
+    }
+  });
 
   // 4. Load dynamic features & state
   await updatePanelData(panel, currentUrl, company);
@@ -928,5 +952,67 @@ async function evaluateJobPayload(job: { id: string, title: string, company: str
     }
   } catch (err) {
     console.warn('[NextRole] Job evaluation failed:', err);
+  }
+}
+
+// ----------------------------------------------------
+// DYNAMIC HUD FEED RENDERER
+// ----------------------------------------------------
+
+async function renderCareerFeed(panel: HTMLElement) {
+  const feedContainer = panel.querySelector('#nr-feed-list');
+  if (!feedContainer) return;
+
+  try {
+    const storage = (await browser.storage.local.get(['scrapedJobs', 'timeHorizonFilter'])) as any;
+    const allJobs: any[] = storage.scrapedJobs || [];
+    const activeFilter: string = storage.timeHorizonFilter || 'all';
+
+    // Apply time horizon filter
+    const filteredJobs = allJobs.filter((job: any) => {
+      if (activeFilter === 'all') return true;
+      if (activeFilter === 'today') return job.timeHorizon === 'today';
+      if (activeFilter === 'week') return job.timeHorizon === 'today' || job.timeHorizon === 'week';
+      return true;
+    });
+
+    // Update footer count
+    const countEl = panel.querySelector('#nr-tracked-pages-count');
+    if (countEl) countEl.textContent = `${allJobs.length} signals cached`;
+
+    // Empty state
+    if (filteredJobs.length === 0) {
+      feedContainer.innerHTML = `
+        <div class="terminal-alert">
+          // NO TRACKED STREAM ALIGNED TO MATRIX<br><br>
+          <span style="color: var(--cyan); font-size: 9px;">[ Navigate to a LinkedIn Jobs search to begin scanning ]</span>
+        </div>
+      `;
+      return;
+    }
+
+    // Compile cards
+    feedContainer.innerHTML = filteredJobs.map((job: any) => {
+      const tagClass = job.timeHorizon === 'today' ? 'today' : job.timeHorizon === 'week' ? 'week' : '';
+      const tagLabel = job.timeHorizon === 'today' ? '? TODAY' : job.timeHorizon === 'week' ? '?? THIS WEEK' : '??? OLDER';
+      const safeTitle = escapeHtml(job.title || 'Untitled Role');
+      const safeCompany = escapeHtml(job.company || 'Unknown');
+      const safeUrl = escapeHtml(job.url || '#');
+
+      return `
+        <div class="nr-feed-card">
+          <div class="nr-feed-card-title">${safeTitle}</div>
+          <div class="nr-feed-card-meta">
+            <span>?? ${safeCompany}</span>
+            <span class="nr-feed-card-tag ${tagClass}">${tagLabel}</span>
+          </div>
+          <button class="nr-feed-btn" onclick="window.open('${safeUrl}', '_blank')">? COMPILE ATS RESUME</button>
+        </div>
+      `;
+    }).join('');
+
+  } catch (err) {
+    console.warn('[NextRole] Feed render failed:', err);
+    feedContainer.innerHTML = `<div class="terminal-alert">// FEED RENDER ERROR — RETRYING...</div>`;
   }
 }
