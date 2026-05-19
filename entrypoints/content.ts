@@ -67,7 +67,29 @@ async function safeBackendFetch(
   }
 }
 
-async function handleDetection() {
+// Resilient Session Storage Wrappers to prevent SecurityError crashes in Incognito/Strict Privacy modes
+function safeGetDismissedState(): boolean {
+  try {
+    return sessionStorage.getItem('nextrole-panel-dismissed') === 'true';
+  } catch (e) {
+    console.warn('[NextRole] sessionStorage access denied by browser privacy settings.');
+    return false;
+  }
+}
+
+function safeSetDismissedState(isDismissed: boolean) {
+  try {
+    if (isDismissed) {
+      sessionStorage.setItem('nextrole-panel-dismissed', 'true');
+    } else {
+      sessionStorage.removeItem('nextrole-panel-dismissed');
+    }
+  } catch (e) {
+    console.warn('[NextRole] sessionStorage access denied by browser privacy settings.');
+  }
+}
+
+async function handleDetection(retryCount = 0) {
   const isCareerPage = detectCareerPage();
 
   if (isCareerPage) {
@@ -82,7 +104,7 @@ async function handleDetection() {
         displaySpan.textContent = company;
       }
       
-      const isDismissed = sessionStorage.getItem('nextrole-panel-dismissed') === 'true';
+      const isDismissed = safeGetDismissedState();
       if (!isDismissed) {
         existingPanel.style.transform = 'translateX(0)';
         existingPanel.style.opacity = '1';
@@ -101,12 +123,18 @@ async function handleDetection() {
       // Injected for the first time, draw the panel
       await injectSidePanel();
       
-      if (sessionStorage.getItem('nextrole-panel-dismissed') === 'true') {
+      if (safeGetDismissedState()) {
         injectFloatingTrigger();
       }
     }
   } else {
-    // If the user navigates away from a career portal, slide the side panel out of view automatically!
+    // If not detected immediately, retry up to 2 times to account for slow SPA React/Vue DOM hydration delays
+    if (retryCount < 2) {
+      setTimeout(() => handleDetection(retryCount + 1), 800);
+      return;
+    }
+
+    // If the user navigates away from a career portal completely, slide the side panel out of view automatically!
     const panel = document.getElementById('nextrole-side-panel');
     if (panel) {
       panel.style.transform = 'translateX(360px)';
@@ -222,7 +250,7 @@ async function injectSidePanel() {
 
   const company = getCompanyName();
   const currentUrl = window.location.href;
-  const isDismissed = sessionStorage.getItem('nextrole-panel-dismissed') === 'true';
+  const isDismissed = safeGetDismissedState();
 
   // 1. Create Panel Element container
   const panel = document.createElement('div');
@@ -345,7 +373,7 @@ async function injectSidePanel() {
   // 3. Close panel event action
   const closeBtn = panel.querySelector('#nr-close-panel') as HTMLElement;
   closeBtn?.addEventListener('click', () => {
-    sessionStorage.setItem('nextrole-panel-dismissed', 'true');
+    safeSetDismissedState(true);
     panel.style.transform = 'translateX(360px)';
     panel.style.opacity = '0';
     panel.style.pointerEvents = 'none';
@@ -688,7 +716,7 @@ function injectFloatingTrigger() {
   });
 
   trigger.addEventListener('click', () => {
-    sessionStorage.removeItem('nextrole-panel-dismissed');
+    safeSetDismissedState(false);
     const panel = document.getElementById('nextrole-side-panel');
     if (panel) {
       panel.style.transform = 'translateX(0)';
