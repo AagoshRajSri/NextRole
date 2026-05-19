@@ -1,7 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
-import Stripe from 'stripe';
+
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import path from 'path';
@@ -28,9 +28,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Configure Stripe (fallback to mock if key is missing)
-const stripeKey = process.env.STRIPE_SECRET_KEY || '';
-const stripe = stripeKey.startsWith('sk_') ? new Stripe(stripeKey) : null;
 
 // Initialize BullMQ Queue if Redis is configured
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
@@ -281,71 +278,7 @@ app.get('/api/resumes/:jobId', async (req, res) => {
   }
 });
 
-/**
- * ----------------------------------------------------
- * PREMIUM SUBSCRIPTION & STRIPE PAYWALL API
- * ----------------------------------------------------
- */
 
-// GET /api/subscription - Check user's subscription status
-app.get('/api/subscription', async (req, res) => {
-  const userId = getUserId(req);
-  try {
-    const sub = await prisma.userSubscription.findUnique({
-      where: { userId }
-    });
-    res.json({ isActive: sub?.isActive || false });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/checkout - Create a Stripe checkout session for $15/month paywall
-app.post('/api/checkout', async (req, res) => {
-  const userId = getUserId(req);
-  
-  try {
-    if (!stripe) {
-      // Mock payment mode for testing when Stripe key is not configured
-      console.log(`[Stripe Mock] Creating checkout for user: ${userId}`);
-      
-      // Proactively activate premium subscription immediately in mock mode
-      await prisma.userSubscription.upsert({
-        where: { userId },
-        update: { isActive: true },
-        create: { userId, stripeCustomerId: `mock-cus-${userId}`, isActive: true }
-      });
-      
-      return res.json({ url: 'https://checkout.stripe.com/mock-success-premium-activated' });
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: 'NextRole Premium Plan',
-              description: 'AI-tailored resumes and 24/7 background job board monitoring',
-            },
-            unit_amount: 1500, // $15.00
-            recurring: { interval: 'month' },
-          },
-          quantity: 1,
-        },
-      ],
-      mode: 'subscription',
-      success_url: `${req.headers.origin || 'http://localhost:3000'}/subscription-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${req.headers.origin || 'http://localhost:3000'}/subscription-cancel`,
-      client_reference_id: userId,
-    });
-
-    res.json({ url: session.url });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // START EXPRESS SERVER
 const PORT = process.env.PORT || 5000;

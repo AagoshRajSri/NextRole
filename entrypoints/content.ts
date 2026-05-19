@@ -229,99 +229,113 @@ async function injectSidePanel() {
   panel.id = 'nextrole-side-panel';
   
   panel.innerHTML = `
-    <!-- Top Cyber Accent Line -->
-    <div style="height: 3px; background: #f0ff00; box-shadow: 0 0 8px #f0ff00;"></div>
-    
-    <!-- Translucent Grid Overlay -->
-    <div style="position: absolute; top:0; left:0; width:100%; height:100%; background-image: linear-gradient(rgba(0, 240, 255, 0.01) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 240, 255, 0.01) 1px, transparent 1px); background-size: 15px 15px; pointer-events: none; z-index: 0;"></div>
-
     <style>
-      @keyframes logo-spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
+      @keyframes nr-logo-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      .nr-side-logo-spin { animation: nr-logo-spin 15s linear infinite; }
+      #nextrole-side-panel {
+        --bg: #051424;
+        --surface: #0d1c2d;
+        --surface2: #0a1628;
+        --border: rgba(0,240,255,0.12);
+        --border2: rgba(255,255,255,0.06);
+        --yellow: #f0ff00;
+        --cyan: #00f0ff;
+        --text: #e2eaf4;
+        --muted: #4a6080;
+        --font: 'Space Grotesk', sans-serif;
+        --mono: 'JetBrains Mono', monospace;
       }
-      .nr-side-logo-spin {
-        animation: logo-spin 15s linear infinite;
-      }
+      .nr-hdr { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 16px 0; display: flex; flex-direction: column; position: relative; }
+      .nr-close-btn { position: absolute; top: 8px; right: 8px; background: none; border: none; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; transition: all 0.2s ease; outline: none; padding: 0; }
+      .nr-close-btn:hover { color: #ffffff; background: rgba(255, 255, 255, 0.06); }
+      .nr-logo-text { text-align: center; font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--yellow); letter-spacing: 2px; text-shadow: 0 0 18px rgba(240,255,0,0.45); padding-bottom: 8px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+      .nr-tab-bar { display: flex; gap: 0; }
+      .nr-tab-btn { flex: 1; background: none; border: none; color: var(--muted); font-family: var(--font); font-size: 11px; font-weight: 600; padding: 8px 4px; cursor: pointer; position: relative; transition: color .2s; display: flex; align-items: center; justify-content: center; gap: 5px; outline: none; }
+      .nr-tab-btn.active { color: var(--yellow); }
+      .nr-tab-btn.active::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: var(--yellow); border-radius: 2px 2px 0 0; box-shadow: 0 0 8px var(--yellow); }
+      .nr-tab-btn:not(.active):hover { color: var(--cyan); }
+      
+      .nr-view { display: none; flex-direction: column; gap: 10px; padding: 12px 14px; flex: 1; overflow-y: auto; }
+      .nr-view.active { display: flex; }
+      
+      .nr-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+      .nr-card-label { font-family: var(--mono); font-size: 8px; font-weight: 700; text-transform: uppercase; color: var(--cyan); letter-spacing: 0.8px; }
+      .nr-card-title { font-size: 13.5px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; }
+      
+      .nr-footer { margin-top: auto; border-top: 1px solid var(--border2); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--muted); font-family: var(--mono); background: var(--surface); }
+      
+      /* Scrollbar */
+      #nextrole-side-panel ::-webkit-scrollbar { width: 4px; }
+      #nextrole-side-panel ::-webkit-scrollbar-track { background: transparent; }
+      #nextrole-side-panel ::-webkit-scrollbar-thumb { background: rgba(0,240,255,0.15); border-radius: 4px; }
     </style>
-    
-    <div style="padding: 24px; display: flex; flex-direction: column; gap: 20px; height: 100%; box-sizing: border-box; position: relative; z-index: 1;">
-      <!-- Header HUD -->
-      <div style="display: flex; align-items: center; justify-content: space-between;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <div style="background: rgba(0, 240, 255, 0.05); width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(0, 240, 255, 0.25); box-shadow: 0 0 8px rgba(0, 240, 255, 0.15);">
-            <svg class="nr-side-logo-spin" style="width: 14px; height: 14px;" viewBox="0 0 24 24" fill="none" stroke="#00f0ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
-              <polyline points="12 2 12 22" />
-              <polyline points="12 12 22 8.5" />
-              <polyline points="12 12 2 8.5" />
-            </svg>
-          </div>
-          <div style="display: flex; flex-direction: column; gap: 1px;">
-            <span style="font-family: 'Space Grotesk', monospace; font-weight: 700; font-size: 13.5px; letter-spacing: 1px; color: #f0ff00; text-shadow: 0 0 10px rgba(240,255,0,0.3);">NextRole</span>
-            <span style="font-family: 'Space Grotesk', monospace; font-size: 7.5px; color: #00f0ff; font-weight: 700; letter-spacing: 0.5px;">// CO-PILOT.v1.0</span>
-          </div>
-        </div>
-        <button id="nr-close-panel" style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); color: #94a3b8; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; transition: all 0.2s ease; outline: none; padding: 0;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
+
+    <div class="nr-hdr">
+      <button id="nr-close-panel" class="nr-close-btn">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <div class="nr-logo-text">
+        <svg class="nr-side-logo-spin" style="width: 16px; height: 16px;" viewBox="0 0 24 24" fill="none" stroke="#00f0ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
+          <polyline points="12 2 12 22" /><polyline points="12 12 22 8.5" /><polyline points="12 12 2 8.5" />
+        </svg>
+        NextRole
+      </div>
+      <div class="nr-tab-bar">
+        <button class="nr-tab-btn active" data-view="copilot">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+          Co-Pilot
+        </button>
+        <button class="nr-tab-btn" data-view="resume">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          ATS Resume
         </button>
       </div>
+    </div>
 
-      <!-- Company Details HUD -->
-      <div style="background: #0d1c2d; border: 1px solid rgba(0, 240, 255, 0.15); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px;">
-        <span style="font-family: 'Space Grotesk', monospace; font-size: 8px; font-weight: 700; text-transform: uppercase; color: #00f0ff; letter-spacing: 0.8px;">// CAREER FEED ACTIVE</span>
-        <div style="font-size: 13.5px; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 6px;">
-          <span>🏢</span> <span id="nr-company-display" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px;">${company}</span>
+    <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+      <!-- View: Co-Pilot -->
+      <div id="nr-view-copilot" class="nr-view active">
+        <div class="nr-card">
+          <span class="nr-card-label">// CAREER FEED ACTIVE</span>
+          <div class="nr-card-title"><span>🏢</span> <span id="nr-company-display" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px;">${company}</span></div>
+        </div>
+        <div id="nr-action-container" style="transition: all 0.3s ease;">
+          <div style="color: var(--muted); text-align: center; font-size: 11px; font-family: var(--mono);">[ CONNECTING TO DATABASE NODE... ]</div>
         </div>
       </div>
 
-      <!-- Action Tracking Module -->
-      <div id="nr-action-container" style="transition: all 0.3s ease;">
-        <div style="color: #94a3b8; text-align: center; font-size: 11px; font-family: 'Space Grotesk', monospace;">[ CONNECTING TO DATABASE NODE... ]</div>
-      </div>
-
-      <!-- Premium HUD Panel -->
-      <div id="nr-premium-container" style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; font-size: 11.5px; transition: all 0.3s ease;">
-        <div style="color: #94a3b8; font-family: 'Space Grotesk', monospace; font-size: 10px;">[ SUBSCRIPTION: SYNCING ]</div>
-      </div>
-
-      <!-- Resume Module Container -->
-      <div id="nr-resume-container" style="transition: all 0.3s ease;">
-        <!-- Technical Resume Optimization Notice -->
-        <div style="background: rgba(139, 92, 246, 0.04); border: 1px dashed rgba(139, 92, 246, 0.18); border-radius: 10px; padding: 11px 13px; font-size: 11px; color: #94a3b8; line-height: 1.45; display: flex; flex-direction: column; gap: 3px;">
-          <strong style="color: #cbd5e1; font-family: 'Space Grotesk', monospace; font-size: 11px; letter-spacing: 0.2px;">💡 AUTOMATED ATS COMPILER</strong>
-          <span>Navigate into any distinct job listing detail page. Co-pilot will automatically compile an tailored A4 PDF resume!</span>
+      <!-- View: ATS Resume -->
+      <div id="nr-view-resume" class="nr-view">
+        <div id="nr-resume-container" style="transition: all 0.3s ease;">
+          <div style="color: var(--muted); text-align: center; font-size: 11px; font-family: var(--mono);">[ SYNCING ATS... ]</div>
         </div>
       </div>
-
-      <!-- Footer HUD -->
-      <div style="margin-top: auto; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 14px; display: flex; align-items: center; justify-content: space-between; font-size: 10.5px; color: #94a3b8; font-family: 'Space Grotesk', monospace;">
-        <span style="display: flex; align-items: center; gap: 6px;"><span style="background-color: #00f0ff; width: 5px; height: 5px; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px #00f0ff;"></span>[ SECURE SYSTEM ]</span>
+      
+      <div class="nr-footer">
+        <span style="display: flex; align-items: center; gap: 6px;"><span style="background-color: var(--cyan); width: 5px; height: 5px; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px var(--cyan);"></span>[ SECURE SYSTEM ]</span>
         <span id="nr-tracked-pages-count">0 channels online</span>
       </div>
     </div>
   `;
 
-  // 2. Set Side Panel styling using dark futuristic glassmorphism themes
+  // 2. Set Side Panel styling
   Object.assign(panel.style, {
     position: 'fixed',
     top: '24px',
     right: '24px',
-    width: '310px',
+    width: '320px',
     height: 'calc(100vh - 48px)',
     zIndex: '2147483647',
-    background: 'rgba(5, 20, 36, 0.95)',
-    border: '1px solid rgba(0, 240, 255, 0.18)', // Glowing cyber-accent thin border
-    borderRadius: '16px',
-    boxShadow: '0 25px 60px -15px rgba(0, 240, 255, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
+    background: '#051424',
+    border: '1px solid rgba(0, 240, 255, 0.12)',
+    borderRadius: '12px',
+    boxShadow: '0 25px 60px -15px rgba(0, 240, 255, 0.15)',
     fontFamily: '"Space Grotesk", system-ui, -apple-system, sans-serif',
     transition: 'all 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
-    backdropFilter: 'blur(20px)',
-    webkitBackdropFilter: 'blur(20px)',
     overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
     transform: isDismissed ? 'translateX(360px)' : 'translateX(0)',
     opacity: isDismissed ? '0' : '1',
     pointerEvents: isDismissed ? 'none' : 'auto',
@@ -340,14 +354,17 @@ async function injectSidePanel() {
     injectFloatingTrigger();
   });
 
-  // Close button hover animations
-  closeBtn?.addEventListener('mouseenter', () => {
-    closeBtn.style.color = '#ffffff';
-    closeBtn.style.background = 'rgba(255, 255, 255, 0.06)';
-  });
-  closeBtn?.addEventListener('mouseleave', () => {
-    closeBtn.style.color = '#94a3b8';
-    closeBtn.style.background = 'rgba(255,255,255,0.02)';
+  // 3.5. Tab switching logic
+  panel.querySelectorAll('.nr-tab-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      panel.querySelectorAll('.nr-tab-btn').forEach(b => b.classList.remove('active'));
+      (e.currentTarget as HTMLElement).classList.add('active');
+      
+      const viewId = (e.currentTarget as HTMLElement).dataset.view;
+      panel.querySelectorAll('.nr-view').forEach(v => v.classList.remove('active'));
+      const targetView = panel.querySelector(`#nr-view-${viewId}`);
+      if (targetView) targetView.classList.add('active');
+    });
   });
 
   // Append Side Panel
@@ -382,16 +399,16 @@ async function updatePanelData(panel: HTMLElement, currentUrl: string, company: 
   if (isTracked) {
     actionContainer.innerHTML = `
       <div style="background: rgba(0, 200, 81, 0.04); border: 1px solid rgba(0, 200, 81, 0.25); border-radius: 12px; padding: 14px; text-align: center; display: flex; flex-direction: column; gap: 6px; box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.02);">
-        <div style="color: #00c851; font-family: 'Space Grotesk', monospace; font-weight: 700; font-size: 11.5px; display: flex; align-items: center; justify-content: center; gap: 6px; letter-spacing: 0.5px;">
+        <div style="color: #00c851; font-family: var(--mono); font-weight: 700; font-size: 11.5px; display: flex; align-items: center; justify-content: center; gap: 6px; letter-spacing: 0.5px;">
           <span style="background-color: #00c851; width: 6px; height: 6px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #00c851;"></span>
           [ MONITORING STATUS: ACTIVE ]
         </div>
-        <p style="font-size: 11px; color: #94a3b8; margin: 0; line-height: 1.45;">NextRole is currently auditing this channel in the background. System-level desktop alerts will launch as jobs release.</p>
+        <p style="font-size: 11px; color: var(--muted); margin: 0; line-height: 1.45;">NextRole is currently auditing this channel in the background. System-level desktop alerts will launch as jobs release.</p>
       </div>
     `;
   } else {
     actionContainer.innerHTML = `
-      <button id="nr-track-action-btn" style="width: 100%; background: #f0ff00; border: none; border-radius: 10px; color: #000000; font-family: 'Space Grotesk', monospace; font-weight: 700; font-size: 12px; padding: 12px; cursor: pointer; transition: all 0.25s ease; box-shadow: 0 4px 14px rgba(240, 255, 0, 0.25); outline: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 8px; letter-spacing: 0.5px;">
+      <button id="nr-track-action-btn" style="width: 100%; background: var(--yellow); border: none; border-radius: 10px; color: #000000; font-family: var(--mono); font-weight: 700; font-size: 12px; padding: 12px; cursor: pointer; transition: all 0.25s ease; box-shadow: 0 4px 14px rgba(240, 255, 0, 0.25); outline: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 8px; letter-spacing: 0.5px; margin-top: 4px;">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M5 12h14"></path>
           <path d="M12 5v14"></path>
@@ -410,7 +427,7 @@ async function updatePanelData(panel: HTMLElement, currentUrl: string, company: 
     trackBtn?.addEventListener('mouseleave', () => {
       trackBtn.style.transform = 'translateY(0)';
       trackBtn.style.boxShadow = '0 4px 14px rgba(240, 255, 0, 0.25)';
-      trackBtn.style.background = '#f0ff00';
+      trackBtn.style.background = 'var(--yellow)';
     });
 
     trackBtn?.addEventListener('click', async () => {
@@ -477,96 +494,6 @@ async function updatePanelData(panel: HTMLElement, currentUrl: string, company: 
         console.error('[NextRole] Click track failed:', err);
         trackBtn.removeAttribute('disabled');
         trackBtn.textContent = 'CONNECT CHANNEL FEED';
-      }
-    });
-  }
-
-  // ----------------------------------------------------
-  // B. RENDER PREMIUM SUBSCRIPTION MODULE
-  // ----------------------------------------------------
-  let isPremium = false;
-  try {
-    const subRes = await safeBackendFetch('http://localhost:5000/api/subscription', {
-      headers: { 'X-User-Id': userId }
-    });
-    if (subRes && subRes.success && subRes.data) {
-      isPremium = subRes.data.isActive;
-    }
-  } catch (e) {
-    console.warn('[NextRole] Backend subscription sync offline.');
-  }
-
-  if (isPremium) {
-    premiumContainer.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <div style="background: rgba(0, 240, 255, 0.1); color: #00f0ff; font-weight: 700; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; border: 1px solid rgba(0, 240, 255, 0.25); box-shadow: 0 0 8px rgba(0, 240, 255, 0.25);">★</div>
-        <div style="display: flex; flex-direction: column; gap: 1px;">
-          <span style="font-weight: 700; color: #00f0ff; font-family: 'Space Grotesk', monospace; font-size: 11px;">[ CORE TIER: PREMIUM ]</span>
-          <span style="font-size: 10.5px; color: #94a3b8;">Claude optimization nodes are online.</span>
-        </div>
-      </div>
-    `;
-  } else {
-    premiumContainer.innerHTML = `
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="background: rgba(245, 158, 11, 0.08); color: #f59e0b; font-weight: 700; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; border: 1px solid rgba(245, 158, 11, 0.2);">★</div>
-          <div style="display: flex; flex-direction: column; gap: 1px;">
-            <span style="font-weight: 700; color: #f59e0b; font-family: 'Space Grotesk', monospace; font-size: 11px;">[ CO-PILOT: FREE MODULE ]</span>
-            <span style="font-size: 10px; color: #94a3b8;">ATS keyword mapping is locked.</span>
-          </div>
-        </div>
-        
-        <button id="nr-upgrade-action-btn" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 8px; color: #f59e0b; font-family: 'Space Grotesk', monospace; font-size: 10.5px; font-weight: 700; padding: 7px; cursor: pointer; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); outline: none; margin-top: 4px; display: flex; align-items: center; justify-content: center; gap: 4px; box-sizing: border-box; width: 100%; letter-spacing: 0.2px;">
-          UPGRADE MODULE ($15/MO)
-        </button>
-      </div>
-    `;
-
-    // Hook up upgrade payments click listener
-    const upgradeBtn = panel.querySelector('#nr-upgrade-action-btn') as HTMLElement;
-    upgradeBtn?.addEventListener('mouseenter', () => {
-      upgradeBtn.style.background = 'rgba(245, 158, 11, 0.12)';
-      upgradeBtn.style.borderColor = 'rgba(245, 158, 11, 0.35)';
-    });
-    upgradeBtn?.addEventListener('mouseleave', () => {
-      upgradeBtn.style.background = 'rgba(245, 158, 11, 0.06)';
-      upgradeBtn.style.borderColor = 'rgba(245, 158, 11, 0.2)';
-    });
-
-    upgradeBtn?.addEventListener('click', async () => {
-      upgradeBtn.setAttribute('disabled', 'true');
-      upgradeBtn.textContent = 'BOOTING STRIPE GATEWAY...';
-
-      try {
-        const checkRes = await safeBackendFetch('http://localhost:5000/api/checkout', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Id': userId
-          }
-        });
-        
-        if (checkRes && checkRes.success && checkRes.data) {
-          const data = checkRes.data;
-          if (data.url) {
-            // Open mock Stripe activation in a new tab directly through message delegator
-            if (typeof browser !== 'undefined' && browser.runtime?.id) {
-              await browser.runtime.sendMessage({ action: 'openTab', url: data.url });
-            }
-
-            // In simulated payments mode, refresh panel status in 1 second to instantly activate!
-            if (data.url.includes('mock-success-premium-activated')) {
-              setTimeout(async () => {
-                await updatePanelData(panel, currentUrl, company);
-              }, 1200);
-            }
-          }
-        }
-      } catch (err) {
-        console.error('[NextRole] Stripe redirect failed:', err);
-        upgradeBtn.removeAttribute('disabled');
-        upgradeBtn.textContent = 'UPGRADE MODULE ($15/MO)';
       }
     });
   }
@@ -672,9 +599,9 @@ async function updatePanelData(panel: HTMLElement, currentUrl: string, company: 
       } else {
         // Fallback default info notice
         resumeContainer.innerHTML = `
-          <div style="background: rgba(139, 92, 246, 0.04); border: 1px dashed rgba(139, 92, 246, 0.18); border-radius: 10px; padding: 11px 13px; font-size: 11px; color: #94a3b8; line-height: 1.45; display: flex; flex-direction: column; gap: 3px; box-sizing: border-box; width: 100%;">
-            <strong style="color: #cbd5e1; font-family: 'Space Grotesk', monospace; font-size: 11px; letter-spacing: 0.2px;">💡 AUTOMATED ATS COMPILER</strong>
-            <span>Navigate into any distinct job listing detail page. Co-pilot will automatically compile an tailored A4 PDF resume!</span>
+          <div style="background: rgba(139, 92, 246, 0.04); border: 1px dashed rgba(139, 92, 246, 0.18); border-radius: 10px; padding: 11px 13px; font-size: 11px; color: var(--muted); line-height: 1.45; display: flex; flex-direction: column; gap: 3px; box-sizing: border-box; width: 100%;">
+            <strong style="color: #cbd5e1; font-family: var(--mono); font-size: 11px; letter-spacing: 0.2px;">💡 AUTOMATED ATS COMPILER</strong>
+            <span>Navigate into any distinct job listing detail page. Co-pilot will automatically compile a tailored A4 PDF resume!</span>
           </div>
         `;
       }
