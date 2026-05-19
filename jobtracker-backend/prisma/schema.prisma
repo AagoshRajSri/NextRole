@@ -1,11 +1,13 @@
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 model TrackedSearch {
@@ -29,6 +31,8 @@ model JobSnapshot {
   url             String           // Direct URL to apply
   firstSeenAt     DateTime         @default(now())
   isNew           Boolean          @default(true) // Helper to track if the extension has polled it yet
+  jobEmbedding    Unsupported("vector(1536)")?
+  semanticScore   Float?
   tailoredResumes TailoredResume[]
 
   @@unique([trackedSearchId, atsJobId]) // Ensure we don't save duplicate snapshots for the same tracked search
@@ -41,6 +45,7 @@ model UserProfile {
   skills          String   @db.Text
   education       String   @db.Text
   projects        String   @db.Text
+  profileEmbedding Unsupported("vector(1536)")?
   isPremium       Boolean  @default(false)
   monthlyRunsUsed Int      @default(0)
   updatedAt       DateTime @updatedAt

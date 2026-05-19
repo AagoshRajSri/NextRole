@@ -1,6 +1,8 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
@@ -12,6 +14,13 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const prisma = new PrismaClient();
 const app = express();
+const httpServer = http.createServer(app);
+const io = new SocketIOServer(httpServer, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
 app.use(express.json());
 
 // Serve generated PDFs statically
@@ -32,12 +41,64 @@ app.use((req, res, next) => {
 // Initialize BullMQ Queue if Redis is configured
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 let monitorQueue: Queue | null = null;
+let redisSubscriber: Redis | null = null;
+
 try {
   const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
   monitorQueue = new Queue('monitorQueue', { connection });
   console.log('[Server] Successfully connected to Redis for BullMQ.');
+  
+  // High-Performance Redis Pub/Sub Telemetry Layer
+  redisSubscriber = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  redisSubscriber.subscribe('jobAlerts', (err) => {
+    if (err) console.error('[Server] Failed to subscribe to Redis jobAlerts channel', err);
+    else console.log('[Server] Successfully subscribed to Redis jobAlerts channel.');
+  });
 } catch (e) {
-  console.warn('[Server] Redis not connected. BullMQ monitoring queue will be disabled locally.');
+  console.warn('[Server] Redis not connected. BullMQ and Pub/Sub monitoring queue will be disabled locally.');
+}
+
+// ----------------------------------------------------
+// SOCKET.IO REAL-TIME TELEMETRY REGISTRY
+// ----------------------------------------------------
+const activeSockets = new Map<string, any>();
+
+io.use((socket, next) => {
+  const userId = socket.handshake.auth?.userId || socket.handshake.headers['x-user-id'];
+  if (!userId) {
+    return next(new Error("Unauthorized: JWT or User ID required"));
+  }
+  socket.data.userId = userId;
+  next();
+});
+
+io.on('connection', (socket) => {
+  const userId = socket.data.userId;
+  activeSockets.set(userId, socket);
+  console.log(`[Socket.io] 🟢 Client Connected: ${userId}`);
+
+  socket.on('disconnect', () => {
+    activeSockets.delete(userId);
+    console.log(`[Socket.io] 🔴 Client Disconnected: ${userId}`);
+  });
+});
+
+if (redisSubscriber) {
+  redisSubscriber.on('message', (channel, message) => {
+    if (channel === 'jobAlerts') {
+      try {
+        const payload = JSON.parse(message);
+        const { userId, job } = payload;
+        const userSocket = activeSockets.get(userId);
+        if (userSocket) {
+          // Emit lightweight JSON payload under 10ms directly down the active socket stream
+          userSocket.emit('JOB_ALERT_DISCOVERED', job);
+        }
+      } catch (err) {
+        console.error('[Server] Error parsing jobAlerts payload:', err);
+      }
+    }
+  });
 }
 
 // Helper to get User ID from headers
@@ -352,7 +413,8 @@ app.post('/api/resumes/tailor', verifyTokenBudget, async (req, res) => {
 
 // START EXPRESS SERVER
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`\n🚀 NextRole Backend Running on http://localhost:${PORT}`);
   console.log(`- API endpoints: http://localhost:${PORT}/api/*`);
+  console.log(`- Socket.io Real-Time Telemetry Active`);
 });

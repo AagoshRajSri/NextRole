@@ -1,4 +1,7 @@
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-extra';
+import stealth from 'puppeteer-extra-plugin-stealth';
+
+chromium.use(stealth());
 
 export interface ScrapedJob {
   id: string;       // The unique ID from the ATS
@@ -21,8 +24,12 @@ export async function scrapeJobs(targetUrl: string): Promise<ScrapedJob[]> {
     });
     const page = await context.newPage();
     
-    // Navigate to page
+    // Implement jagged delay behavior emulation
+    await page.waitForTimeout(Math.floor(Math.random() * 500) + 200);
+    
+    // Navigate to page securely
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(Math.floor(Math.random() * 1000) + 500);
     
     const url = targetUrl.toLowerCase();
     let jobs: ScrapedJob[] = [];

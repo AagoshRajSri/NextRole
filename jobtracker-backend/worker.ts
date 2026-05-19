@@ -1,14 +1,19 @@
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { Worker, Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { PrismaClient } from '@prisma/client';
 import { scrapeJobs } from './scraper.js';
 import { Resend } from 'resend';
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-extra';
+import stealth from 'puppeteer-extra-plugin-stealth';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { marked } from 'marked';
+
+chromium.use(stealth());
+const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 dotenv.config();
 
@@ -65,35 +70,79 @@ const worker = new Worker('monitorQueue', async (job) => {
 
     console.log(`[Worker] Scrape Analysis: total scraped = ${scrapedJobs.length}, existing snapshots = ${existingJobIds.size}, newly detected = ${newJobsDetected.length}`);
 
+    // Parse company name once for all jobs in this search
+    const company = getCompanyNameFromUrl(url);
+
     // 4. Save new snapshots and trigger workflows
     for (const newJob of newJobsDetected) {
-      console.log(`[Worker] New job detected! Saving: "${newJob.title}" at "${newJob.location}"`);
+      console.log(`[Worker] New job detected! Processing: "${newJob.title}" at "${newJob.location}"`);
 
-      // Save to JobSnapshot
-      const savedJob = await prisma.jobSnapshot.create({
-        data: {
-          trackedSearchId: searchId,
-          atsJobId: newJob.id,
-          title: newJob.title,
-          location: newJob.location,
-          url: newJob.url,
-          isNew: true
+      try {
+        // Save initially to generate UUID
+        const savedJob = await prisma.jobSnapshot.create({
+          data: {
+            trackedSearchId: searchId,
+            atsJobId: newJob.id,
+            title: newJob.title,
+            location: newJob.location,
+            url: newJob.url,
+            isNew: true
+          }
+        });
+
+        const fullDesc = await scrapeFullJobDescription(newJob.url);
+        
+        // AWS Bedrock: Generate Job Vector Embedding
+        const embedding = await generateBedrockEmbedding(`${newJob.title} ${newJob.location} ${fullDesc}`);
+        if (embedding.length > 0) {
+          await prisma.$executeRawUnsafe(
+            `UPDATE "JobSnapshot" SET "jobEmbedding" = $1::vector WHERE id = $2`,
+            `[${embedding.join(',')}]`,
+            savedJob.id
+          );
         }
-      });
 
-      // Parse beautiful company name from search URL
-      const company = getCompanyNameFromUrl(url);
+        const profile = await prisma.userProfile.findUnique({ where: { userId: search.userId } });
+        
+        let semanticScore = 1.0; // Default to pass if no profile embedding exists
+        let passesThreshold = true;
 
-      // Trigger alerts
-      await sendJobEmailAlert(search.userId, company, newJob);
-      
-      // AI resume tailoring (Premium subscription feature)
-      await handlePremiumAiTailoring(search.userId, company, savedJob);
+        if (profile) {
+          // If profile has an embedding, run fast pgvector cosine distance calculation
+          const similarityResult = await prisma.$queryRawUnsafe<any[]>(
+            `SELECT 1 - ("jobEmbedding" <=> "profileEmbedding") AS score 
+             FROM "JobSnapshot" j, "UserProfile" u 
+             WHERE j.id = $1 AND u."userId" = $2 AND j."jobEmbedding" IS NOT NULL AND u."profileEmbedding" IS NOT NULL`,
+            savedJob.id,
+            search.userId
+          );
+
+          if (similarityResult && similarityResult.length > 0 && similarityResult[0].score !== null) {
+            semanticScore = similarityResult[0].score;
+            await prisma.jobSnapshot.update({ where: { id: savedJob.id }, data: { semanticScore } });
+            
+            if (semanticScore < 0.65) {
+              passesThreshold = false;
+              console.log(`[Bedrock] Semantic similarity (${semanticScore.toFixed(3)}) is below 0.65. Dropping alert to preserve token budget.`);
+            }
+          }
+        }
+
+        // Only trigger alerts and tailoring if it passes the vector threshold
+        if (passesThreshold) {
+          await sendJobEmailAlert(search.userId, company, newJob);
+          await handlePremiumAiTailoring(search.userId, company, savedJob, fullDesc);
+        }
+
+      } catch (innerErr) {
+        console.error(`[Worker] Error processing individual job ${newJob.id}:`, innerErr);
+        // Continue processing other jobs in queue
+      }
     }
 
   } catch (error) {
-    console.error(`[Worker] Error handling job ${job.id}:`, error);
-    throw error;
+    console.error(`[Worker] Exhaustive structural failure handling job ${job.id}:`, error);
+    throw error; // Re-throw for BullMQ retry mechanics
   }
 }, { connection });
 
@@ -200,7 +249,7 @@ async function sendJobEmailAlert(userId: string, company: string, job: { title: 
  * AI RESUME TAILORING SERVICE (PREMIUM)
  * ----------------------------------------------------
  */
-async function handlePremiumAiTailoring(userId: string, company: string, jobSnapshot: { id: string; title: string; location: string; url: string }) {
+async function handlePremiumAiTailoring(userId: string, company: string, jobSnapshot: { id: string; title: string; location: string; url: string }, fullJobDesc: string) {
   console.log(`[AI Engine] Verifying premium status for user "${userId}"...`);
 
   // 1. Check if user is premium subscriber
@@ -213,7 +262,7 @@ async function handlePremiumAiTailoring(userId: string, company: string, jobSnap
     return;
   }
 
-  console.log(`[AI Engine] User is active Premium subscriber! Initiating resume tailoring for: "${jobSnapshot.title}" at "${company}"`);
+  console.log(`[AI Engine] User is active Premium subscriber! Initiating AWS Bedrock inference for: "${jobSnapshot.title}" at "${company}"`);
 
   // 2. Fetch master resume profile
   const profile = await prisma.userProfile.findUnique({
@@ -226,13 +275,9 @@ async function handlePremiumAiTailoring(userId: string, company: string, jobSnap
   }
 
   try {
-    // 3. Scrape full job description using Playwright
-    const fullJobDesc = await scrapeFullJobDescription(jobSnapshot.url);
-    console.log(`[AI Engine] Successfully scraped job description (${fullJobDesc.substring(0, 100)}...)`);
-
-    // 4. Generate tailored resume text using Claude API
-    const tailoredText = await callClaudeToTailorResume(profile, jobSnapshot, fullJobDesc);
-    console.log('[AI Engine] Resume tailoring completed via Claude.');
+    // 4. Generate tailored resume text using Bedrock Claude 3.5 Sonnet
+    const tailoredText = await callBedrockToTailorResume(profile, jobSnapshot, fullJobDesc);
+    console.log('[AI Engine] Resume tailoring completed via AWS Bedrock.');
 
     // 5. Generate tailored PDF using Playwright and save it locally
     const filename = `tailored-${jobSnapshot.id}.pdf`;
@@ -263,9 +308,13 @@ async function handlePremiumAiTailoring(userId: string, company: string, jobSnap
  * Helper: Scrape full job description text from ATS job page
  */
 async function scrapeFullJobDescription(url: string): Promise<string> {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   try {
-    const page = await browser.newPage();
+    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const page = await context.newPage();
+    
+    // Playwright anti-bot defense bypass
+    await page.waitForTimeout(Math.floor(Math.random() * 800) + 200);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     
     // Look for common job description containers
@@ -291,20 +340,35 @@ async function scrapeFullJobDescription(url: string): Promise<string> {
 }
 
 /**
- * Helper: Call Claude AI API to tailor the resume
+ * Helper: Generate Embeddings using AWS Bedrock Titan
  */
-async function callClaudeToTailorResume(
+async function generateBedrockEmbedding(text: string): Promise<number[]> {
+  try {
+    const command = new InvokeModelCommand({
+      modelId: 'amazon.titan-embed-text-v2:0',
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({ inputText: text.substring(0, 8000) }) // enforce Titan limits
+    });
+    
+    const response = await bedrock.send(command);
+    const jsonString = new TextDecoder().decode(response.body);
+    const parsed = JSON.parse(jsonString);
+    return parsed.embedding || [];
+  } catch (err) {
+    console.error('[Bedrock] Embedding Generation Failed:', err);
+    return [];
+  }
+}
+
+/**
+ * Helper: Call AWS Bedrock Claude 3.5 Sonnet to tailor the resume
+ */
+async function callBedrockToTailorResume(
   profile: { experience: string; skills: string; education: string; projects: string },
   job: { title: string },
   jobDesc: string
 ): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY || '';
-  
-  if (!apiKey || apiKey.startsWith('sk-ant-123')) {
-    console.log('[AI Engine] Claude API key is simulated. Returning high-fidelity mock tailored resume.');
-    return generateMockTailoredResume(profile, job.title);
-  }
-
   const prompt = `You are the core optimization node of the NextRole Cyber Careers Co-pilot platform. Your purpose is to act as an elite AI Career Engineer specializing in the Cybersecurity and Information Security industries. 
 
 Your objective is to analyze a candidate's Master Profile, cross-reference it with a target Job Description, and synthesize a hyper-tailored, ATS-optimized resume.
@@ -371,24 +435,23 @@ The document must structure into these precise sections:
 - Output ONLY the resume text. Do not acknowledge this prompt. Begin immediately with the markdown payload.`;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json'
-      },
+    const command = new InvokeModelCommand({
+      modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      contentType: 'application/json',
+      accept: 'application/json',
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
+        anthropic_version: 'bedrock-2023-05-31',
         max_tokens: 4000,
         messages: [{ role: 'user', content: prompt }]
       })
     });
-
-    const data: any = await response.json();
-    return data.content[0].text;
+    
+    const response = await bedrock.send(command);
+    const jsonString = new TextDecoder().decode(response.body);
+    const parsed = JSON.parse(jsonString);
+    return parsed.content[0].text;
   } catch (err) {
-    console.error('[AI Engine] Claude API fetch error, falling back to mock generator:', err);
+    console.error('[AI Engine] AWS Bedrock Claude API fetch error, falling back to mock generator:', err);
     return generateMockTailoredResume(profile, job.title);
   }
 }

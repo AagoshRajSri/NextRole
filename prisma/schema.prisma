@@ -1,15 +1,73 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider        = "prisma-client-js"
+  output          = "../generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
+}
+
+model TrackedSearch {
+  id           String        @id @default(uuid())
+  userId       String
+  url          String
+  platform     String
+  createdAt    DateTime      @default(now())
+  snapshots    JobSnapshot[]
+
+  @@index([userId])
+}
+
+model JobSnapshot {
+  id              String           @id @default(uuid())
+  trackedSearchId String
+  trackedSearch   TrackedSearch    @relation(fields: [trackedSearchId], references: [id], onDelete: Cascade)
+  atsJobId        String           // Job ID provided by the ATS platform (Greenhouse opening ID, Lever post ID, etc.)
+  title           String
+  location        String
+  url             String           // Direct URL to apply
+  firstSeenAt     DateTime         @default(now())
+  isNew           Boolean          @default(true) // Helper to track if the extension has polled it yet
+  jobEmbedding    Unsupported("vector(1536)")?
+  semanticScore   Float?
+  tailoredResumes TailoredResume[]
+
+  @@unique([trackedSearchId, atsJobId]) // Ensure we don't save duplicate snapshots for the same tracked search
+}
+
+model UserProfile {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  experience       String   @db.Text
+  skills           String   @db.Text
+  education        String   @db.Text
+  projects         String   @db.Text
+  profileEmbedding Unsupported("vector(1536)")?
+  isPremium        Boolean  @default(false)
+  monthlyRunsUsed  Int      @default(0)
+  updatedAt        DateTime @updatedAt
+}
+
+model TailoredResume {
+  id            String      @id @default(uuid())
+  jobSnapshotId String
+  jobSnapshot   JobSnapshot @relation(fields: [jobSnapshotId], references: [id], onDelete: Cascade)
+  resumeText    String      @db.Text
+  pdfUrl        String?
+  createdAt     DateTime    @default(now())
+}
+
+model UserSubscription {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  stripeCustomerId String   @unique
+  isActive         Boolean  @default(false)
+  updatedAt        DateTime @updatedAt
 }
