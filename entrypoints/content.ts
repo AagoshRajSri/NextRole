@@ -874,6 +874,125 @@ function escapeHtml(unsafe: string): string {
 let linkedInObserver: MutationObserver | null = null;
 const seenJobIds = new Set<string>();
 
+const INDIAN_METRO_MAP: Record<string, string[]> = {
+  "delhi / ncr": ["delhi", "ncr", "gurgaon", "gurugram", "noida", "ghaziabad", "faridabad"],
+  "bengaluru": ["bengaluru", "bangalore", "electronic city", "whitefield"],
+  "hyderabad": ["hyderabad", "secunderabad", "telangana"],
+  "mumbai / pune": ["mumbai", "pune", "thane", "navi mumbai", "maharashtra"],
+  "chennai": ["chennai", "madras", "tamil nadu"]
+};
+
+function escapeRegex(string: string): string {
+  return string.replace(/[/-\^$*+?.()|[]{}]/g, '\\$&');
+}
+
+function safeBtoa(str: string): string {
+  try {
+    return btoa(unescape(encodeURIComponent(str)));
+  } catch (e) {
+    return Math.random().toString(36).substring(2, 15);
+  }
+}
+
+async function evaluateJobLocally(scrapedJob: { title: string; company: string; location: string; rawTime: string; url: string }) {
+  try {
+    const storage = await browser.storage.local.get(['targetRoles', 'targetLocations', 'activeTimeHorizon']) as any;
+    const targetRoles = storage.targetRoles || [];
+    const targetLocations = storage.targetLocations || [];
+    const activeTimeHorizon = storage.activeTimeHorizon || 'all';
+
+    // STEP A: Role Validation (Regex-driven)
+    if (targetRoles && targetRoles.length > 0) {
+      const matchesAnyRole = targetRoles.some((role: string) => {
+        if (!role.trim()) return false;
+        const regex = new RegExp('\\b' + escapeRegex(role.trim()) + '\\b', 'i');
+        return regex.test(scrapedJob.title);
+      });
+      if (!matchesAnyRole) return null;
+    }
+
+    // STEP B: Indian Multi-Location Heuristic
+    const normLoc = scrapedJob.location.toLowerCase();
+    let locationPassed = false;
+
+    if (normLoc.includes('remote')) {
+      locationPassed = true;
+    } else if (targetLocations && targetLocations.length > 0) {
+      for (const targetLoc of targetLocations) {
+        const key = targetLoc.toLowerCase();
+        const aliases = INDIAN_METRO_MAP[key] || [key];
+        if (aliases.some(alias => normLoc.includes(alias))) {
+          locationPassed = true;
+          break;
+        }
+      }
+    } else {
+      // If no locations are selected, default to pass
+      locationPassed = true;
+    }
+
+    if (!locationPassed) return null;
+
+    // STEP C: Time Horizon Matrix Conversion
+    let mappedHorizon = 'older';
+    const ts = scrapedJob.rawTime.toLowerCase();
+    if (ts.includes('hour') || ts.includes('minute') || ts.includes('second') || ts.includes('now') || ts.includes('just now')) {
+      mappedHorizon = 'today';
+    } else if (ts.includes('day')) {
+      const match = ts.match(/(\\d+)/);
+      if (match) {
+        const days = parseInt(match[1], 10);
+        if (!isNaN(days) && days <= 7) {
+          mappedHorizon = 'week';
+        }
+      }
+    }
+
+    if (activeTimeHorizon === 'today') {
+      if (mappedHorizon !== 'today') return null;
+    } else if (activeTimeHorizon === 'week') {
+      if (mappedHorizon !== 'today' && mappedHorizon !== 'week') return null;
+    }
+
+    const passedJob = {
+      title: scrapedJob.title,
+      company: scrapedJob.company,
+      location: scrapedJob.location,
+      timeHorizon: mappedHorizon,
+      url: scrapedJob.url,
+      rawTime: scrapedJob.rawTime
+    };
+
+    // Construct a secure local unique ID string combining btoa(title-company)
+    const signature = `${passedJob.title}-${passedJob.company}`;
+    const uniqueId = safeBtoa(signature);
+
+    // Check local seenJobIds cache
+    if (seenJobIds.has(uniqueId)) return null;
+    seenJobIds.add(uniqueId);
+
+    // Completely fresh, update local storage scrapedJobs
+    const localStore = await browser.storage.local.get('scrapedJobs') as any;
+    const existingJobs: any[] = localStore.scrapedJobs || [];
+    
+    // Append to front, slice to 100 entries maximum
+    const updatedJobs = [{ ...passedJob, id: uniqueId }, ...existingJobs].slice(0, 100);
+    await browser.storage.local.set({ scrapedJobs: updatedJobs });
+
+    console.log(`[NextRole] Local Match Validated: "${passedJob.title}" at "${passedJob.company}"`);
+
+    // Execute local runtime message broadcast to trigger immediate re-render
+    if (typeof browser !== 'undefined' && browser.runtime?.id) {
+      browser.runtime.sendMessage({ action: "REFRESH_HUD_FEED" }).catch(() => {});
+    }
+
+    return passedJob;
+  } catch (err) {
+    console.warn('[NextRole] Local job evaluation failed:', err);
+    return null;
+  }
+}
+
 function startLinkedInScraper() {
   if (linkedInObserver) return; // Already running
   
@@ -891,34 +1010,19 @@ function startLinkedInScraper() {
       try {
         const titleEl = item.querySelector('.job-card-list__title') as HTMLElement;
         const companyEl = item.querySelector('.job-card-list__company-name') as HTMLElement;
-        const timeEl = item.querySelector('.job-card-container__metadata-item--secondary, time') as HTMLElement;
-        const linkEl = item.querySelector('a.job-card-list__title') as HTMLAnchorElement;
+        const timeEl = item.querySelector('.job-card-container__metadata-item--secondary, time, [class*="metadata-item--secondary"]') as HTMLElement;
+        const linkEl = item.querySelector('a.job-card-list__title, a[href*="/jobs/view/"]') as HTMLAnchorElement;
+        const locEl = item.querySelector('.job-card-container__metadata-item, .job-card-list__metadata-item, .job-card-container__metadata-wrapper li, [class*="metadata-item"]') as HTMLElement;
         
         if (!titleEl || !companyEl) return;
         
         const title = titleEl.textContent?.trim() || '';
         const company = companyEl.textContent?.trim() || '';
-        const timeStr = timeEl?.textContent?.trim() || '';
+        const rawTime = timeEl?.textContent?.trim() || '';
+        const location = locEl?.textContent?.trim() || '';
         const url = linkEl?.href || window.location.href;
-        
-        // Generate a stable ID to prevent duplicates
-        const jobIdMatch = url.match(/view\/(\d+)/);
-        const jobId = jobIdMatch ? jobIdMatch[1] : `${title}-${company}`;
-        
-        if (seenJobIds.has(jobId)) return;
-        seenJobIds.add(jobId);
 
-        // Map Time Horizon
-        let timeHorizon = 'all';
-        const ts = timeStr.toLowerCase();
-        if (ts.includes('hour') || ts.includes('minute') || ts.includes('just now')) {
-          timeHorizon = 'today';
-        } else if (ts.includes('day')) {
-          const days = parseInt(ts.replace(/\D/g, ''), 10);
-          if (!isNaN(days) && days <= 7) timeHorizon = 'week';
-        }
-
-        evaluateJobPayload({ id: jobId, title, company, timeHorizon, url, rawTime: timeStr });
+        evaluateJobLocally({ title, company, location, rawTime, url });
       } catch (err) {
         // Fail silently for individual nodes to prevent infinite scroll crashing
       }
@@ -926,33 +1030,6 @@ function startLinkedInScraper() {
   });
 
   linkedInObserver.observe(targetNode, { childList: true, subtree: true });
-}
-
-async function evaluateJobPayload(job: { id: string, title: string, company: string, timeHorizon: string, url: string, rawTime: string }) {
-  try {
-    const storage = (await browser.storage.local.get(['targetRoles', 'timeHorizonFilter'])) as any;
-    const activeRoles = storage.targetRoles || ['Security', 'Cyber', 'AppSec'];
-    const activeTimeFilter = storage.timeHorizonFilter || 'all'; // 'today', 'week', 'all'
-
-    // 1. Time Filter Gate
-    if (activeTimeFilter === 'today' && job.timeHorizon !== 'today') return;
-    if (activeTimeFilter === 'week' && (job.timeHorizon !== 'today' && job.timeHorizon !== 'week')) return;
-
-    // 2. Keyword Gate
-    const targetString = `${job.title} ${job.company}`.toLowerCase();
-    const isMatch = activeRoles.some((role: string) => targetString.includes(role.toLowerCase()));
-
-    if (isMatch) {
-      console.log(`[NextRole] ⚡ High-Signal Match: ${job.title} at ${job.company} (${job.rawTime})`);
-      
-      // Send payload to background engine to populate the database and feed
-      if (typeof browser !== 'undefined' && browser.runtime?.id) {
-        browser.runtime.sendMessage({ action: "UPDATE_CAREER_FEED", job }).catch(() => {});
-      }
-    }
-  } catch (err) {
-    console.warn('[NextRole] Job evaluation failed:', err);
-  }
 }
 
 // ----------------------------------------------------
@@ -964,9 +1041,9 @@ async function renderCareerFeed(panel: HTMLElement) {
   if (!feedContainer) return;
 
   try {
-    const storage = (await browser.storage.local.get(['scrapedJobs', 'timeHorizonFilter'])) as any;
+    const storage = (await browser.storage.local.get(['scrapedJobs', 'activeTimeHorizon'])) as any;
     const allJobs: any[] = storage.scrapedJobs || [];
-    const activeFilter: string = storage.timeHorizonFilter || 'all';
+    const activeFilter: string = storage.activeTimeHorizon || 'all';
 
     // Apply time horizon filter
     const filteredJobs = allJobs.filter((job: any) => {
@@ -994,7 +1071,7 @@ async function renderCareerFeed(panel: HTMLElement) {
     // Compile cards
     feedContainer.innerHTML = filteredJobs.map((job: any) => {
       const tagClass = job.timeHorizon === 'today' ? 'today' : job.timeHorizon === 'week' ? 'week' : '';
-      const tagLabel = job.timeHorizon === 'today' ? '? TODAY' : job.timeHorizon === 'week' ? '?? THIS WEEK' : '??? OLDER';
+      const tagLabel = job.timeHorizon === 'today' ? '⚡ TODAY' : job.timeHorizon === 'week' ? '📅 THIS WEEK' : '🗂️ OLDER';
       const safeTitle = escapeHtml(job.title || 'Untitled Role');
       const safeCompany = escapeHtml(job.company || 'Unknown');
       const safeUrl = escapeHtml(job.url || '#');
@@ -1003,16 +1080,16 @@ async function renderCareerFeed(panel: HTMLElement) {
         <div class="nr-feed-card">
           <div class="nr-feed-card-title">${safeTitle}</div>
           <div class="nr-feed-card-meta">
-            <span>?? ${safeCompany}</span>
+            <span>🏢 ${safeCompany}</span>
             <span class="nr-feed-card-tag ${tagClass}">${tagLabel}</span>
           </div>
-          <button class="nr-feed-btn" onclick="window.open('${safeUrl}', '_blank')">? COMPILE ATS RESUME</button>
+          <button class="nr-feed-btn" onclick="window.open('${safeUrl}', '_blank')">▸ COMPILE ATS RESUME</button>
         </div>
       `;
     }).join('');
 
   } catch (err) {
     console.warn('[NextRole] Feed render failed:', err);
-    feedContainer.innerHTML = `<div class="terminal-alert">// FEED RENDER ERROR � RETRYING...</div>`;
+    feedContainer.innerHTML = `<div class="terminal-alert">// FEED RENDER ERROR - RETRYING...</div>`;
   }
 }
