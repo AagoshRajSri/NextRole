@@ -4,6 +4,8 @@ import { defineConfig } from 'wxt';
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
+    name: 'NextRole',
+    description: 'NextRole - AI-powered Cybersecurity Careers Co-pilot',
     permissions: ['storage', 'notifications'],
   }
 });
