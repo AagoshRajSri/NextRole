@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { marked } from 'marked';
 
 dotenv.config();
 
@@ -236,7 +237,10 @@ async function handlePremiumAiTailoring(userId: string, company: string, jobSnap
     // 5. Generate tailored PDF using Playwright and save it locally
     const filename = `tailored-${jobSnapshot.id}.pdf`;
     const localPath = path.join(publicResumeDir, filename);
-    await generatePdfFile(tailoredText, localPath);
+    
+    // Parse the Markdown tailoredText into HTML for the PDF generator
+    const htmlTailoredText = await marked.parse(tailoredText);
+    await generatePdfFile(htmlTailoredText, localPath);
     const pdfUrl = `/resumes/${filename}`;
 
     // 6. Save tailored resume to database
@@ -301,25 +305,70 @@ async function callClaudeToTailorResume(
     return generateMockTailoredResume(profile, job.title);
   }
 
-  const prompt = `
-    You are a professional ATS resume optimizer. 
-    Rewrite the user's master resume to highly match the job description for the role: "${job.title}".
+  const prompt = `You are the core optimization node of the NextRole Cyber Careers Co-pilot platform. Your purpose is to act as an elite AI Career Engineer specializing in the Cybersecurity and Information Security industries. 
 
-    Master Resume Details:
-    - Experience: ${profile.experience}
-    - Skills: ${profile.skills}
-    - Education: ${profile.education}
-    - Projects: ${profile.projects}
+Your objective is to analyze a candidate's Master Profile, cross-reference it with a target Job Description, and synthesize a hyper-tailored, ATS-optimized resume.
 
-    Job Description:
-    ${jobDesc}
+---
 
-    Instructions:
-    1. Tailor and align the experience bullet points to map directly with required job description skills.
-    2. Optimize target keywords and vocabulary so the resume scores extremely highly on Applicant Tracking Systems (ATS).
-    3. Keep all factual history accurate (dates, company names, titles). DO NOT invent or fabricate any details.
-    4. Format your output strictly in clean HTML, suitable for printing to A4 pages.
-  `;
+### 1. GROUNDING INPUTS
+
+<MASTER_PROFILE>
+Experience: ${profile.experience}
+Skills: ${profile.skills}
+Education: ${profile.education}
+Projects: ${profile.projects}
+</MASTER_PROFILE>
+
+<TARGET_JOB_DESCRIPTION>
+Role: ${job.title}
+${jobDesc}
+</TARGET_JOB_DESCRIPTION>
+
+[CRITICAL RULE] Strict Data Veracity: You may rephrase, recontextualize, and strategically emphasize existing qualifications, but you must NEVER invent fictitious certifications, degrees, employers, or project metrics. If the target job requires a tool the user does not possess, emphasize adjacent or core conceptual transferring skills instead.
+
+---
+
+### 2. ARCHITECTURAL & STRATEGIC PRIORITIES
+
+- **Targeted ATS Keyword Infiltration:** Inject high-signal cybersecurity industry keywords (e.g., SIEM, EDR, NIST CSF, Zero Trust, Incident Response, CI/CD Security, OWASP Top 10) natively into bullet points and skills matrices.
+- **Action-Oriented Impact:** Structure all professional experience points using the X-Y-Z formula: "Accomplished [X], as measured by [Y], by doing [Z]."
+- **Security-Minded Tone:** Maintain a sharp, analytical, professional, and authoritative technical tone. Speak natively in the lexicon of security teams (e.g., "remediated vulnerabilities," "reduced attack surface," "orchestrated incident containment").
+
+---
+
+### 3. OUTPUT SPECIFICATION
+
+Your output must be returned STRICTLY in valid Markdown. Do not include any conversational filler, meta-commentary, or introductory remarks. Start directly with the markdown format.
+
+The document must structure into these precise sections:
+
+#### SECTION I: IDENTIFICATION / TERMINAL BANNER
+- Candidate Name, contact channels, and a precise professional title matched to the target role (e.g., "Senior Application Security Engineer").
+
+#### SECTION II: EXECUTIVE MISSION SUMMARY
+- A punchy, 3-4 sentence paragraph framing the candidate as the definitive solution to the explicit operational pain points identified in the <TARGET_JOB_DESCRIPTION>.
+
+#### SECTION III: SECURITY SPECIFIC SKILLS MATRIX
+- Group technologies cleanly using bullet lists or inline arrays:
+  - **Core Domains:** (e.g., GRC, SecOps, Threat Hunting)
+  - **Tools & Platforms:** (e.g., Splunk, AWS GuardDuty, Burp Suite)
+  - **Frameworks & Compliance:** (e.g., ISO 27001, SOC 2, MITRE ATT&CK)
+
+#### SECTION IV: THREAT-MODEL AND PROFESSIONAL EXPERIENCE
+- For each relevant role, output: **Job Title** | **Company** | **Date Range**
+- Provide 3–5 bullet points detailing quantifiable achievements. Emphasize incident resolution windows, vulnerability remediation metrics, and compliance achievements wherever possible.
+
+#### SECTION V: EDUCATION, CERTIFICATIONS, & CLEARANCES
+- Prioritize high-signal security certs (e.g., CISSP, CEH, OSCP, CompTIA Security+) prominently at the top of this section if present in the Master Profile.
+
+---
+
+### 4. PARSING GUARDRAILS
+
+- Avoid cliché corporate buzzwords ("passionate team player," "synergistic self-starter").
+- Keep formatting tight, utilizing bullet points (\`* \`) to ensure predictable text-wrapping when the backend renders this Markdown into an A4 PDF format.
+- Output ONLY the resume text. Do not acknowledge this prompt. Begin immediately with the markdown payload.`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
