@@ -407,16 +407,62 @@ async function generatePdfFile(htmlContent: string, outputPath: string) {
       <html>
         <head>
           <style>
-            body { font-family: "Segoe UI", system-ui, sans-serif; padding: 40px; line-height: 1.5; color: #1e293b; max-width: 800px; margin: 0 auto; }
-            h1 { font-size: 26px; color: #0f172a; text-align: center; margin-bottom: 5px; font-weight: 800; }
-            .subtitle { font-size: 13px; text-align: center; color: #64748b; margin-bottom: 24px; }
-            h2 { font-size: 15px; border-bottom: 2px solid #e2e8f0; padding-bottom: 4px; margin-top: 24px; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
-            .job-block { margin-bottom: 16px; }
-            .job-header { font-weight: 700; color: #0f172a; font-size: 14px; }
-            .job-date { float: right; font-weight: 500; color: #64748b; font-size: 13px; }
-            .skills-list { font-weight: 500; }
-            ul { padding-left: 18px; margin: 6px 0; }
-            li { margin-bottom: 4px; font-size: 13px; color: #334155; }
+            /* pdf-template.css - Injected into Playwright before rendering */
+            @page {
+                size: A4;
+                margin: 0.65in 0.65in 0.75in 0.65in;
+            }
+            body {
+                font-family: 'Arial', 'Helvetica', sans-serif;
+                color: #111111;
+                line-height: 1.4;
+                font-size: 10.5pt;
+                margin: 0;
+                padding: 0;
+            }
+            h1 {
+                font-size: 22pt;
+                text-transform: uppercase;
+                text-align: center;
+                margin: 0 0 4px 0;
+                letter-spacing: 0.5px;
+            }
+            h2 {
+                font-size: 13pt;
+                color: #0f172a;
+                border-bottom: 1px solid #94a3b8;
+                text-transform: uppercase;
+                margin: 16px 0 8px 0;
+                padding-bottom: 2px;
+                letter-spacing: 0.3px;
+            }
+            h3 {
+                font-size: 11pt;
+                margin: 8px 0 2px 0;
+                display: flex;
+                justify-content: space-between;
+            }
+            p {
+                margin: 0 0 8px 0;
+                text-align: justify;
+            }
+            ul {
+                margin: 0 0 8px 0;
+                padding-left: 20px;
+            }
+            li {
+                margin-bottom: 3px;
+                text-align: justify;
+            }
+            /* Ensure clean line wrapping and avoid orphan headers over page breaks */
+            h2, h3 {
+                page-break-after: avoid;
+                break-after: avoid;
+            }
+            .experience-block, .project-block {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
           </style>
         </head>
         <body>

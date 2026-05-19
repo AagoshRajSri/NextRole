@@ -280,6 +280,76 @@ app.get('/api/resumes/:jobId', async (req, res) => {
 
 
 
+const FREE_TIER_MAX_RUNS = 5;
+
+export async function verifyTokenBudget(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const userId = getUserId(req);
+
+  try {
+    const user = await prisma.userProfile.findUnique({
+      where: { userId }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User profile console not found." });
+    }
+
+    // Check if user is a premium tier subscriber
+    if (!user.isPremium) {
+      // If free tier, enforce hard cap ceiling
+      if (user.monthlyRunsUsed >= FREE_TIER_MAX_RUNS) {
+        return res.status(402).json({
+          error: "TOKEN_LIMIT_EXCEEDED",
+          message: "You have reached your 5 free AI customizations for this month. Upgrade to Premium for infinite bandwidth or supply a custom API key under settings."
+        });
+      }
+    }
+
+    // If validations pass, increment count and handoff request to compiler queue
+    await prisma.userProfile.update({
+      where: { userId },
+      data: { monthlyRunsUsed: { increment: 1 } }
+    });
+
+    next();
+  } catch (error) {
+    return res.status(500).json({ error: "Internal Gateway Error verifying pipeline limits." });
+  }
+}
+
+// POST /api/resumes/tailor - Trigger an AI resume tailoring job
+app.post('/api/resumes/tailor', verifyTokenBudget, async (req, res) => {
+  const userId = getUserId(req);
+  const { jobSnapshotId, companyName } = req.body;
+
+  if (!jobSnapshotId || !companyName) {
+    return res.status(400).json({ error: "jobSnapshotId and companyName are required." });
+  }
+
+  try {
+    const jobSnapshot = await prisma.jobSnapshot.findUnique({
+      where: { id: jobSnapshotId }
+    });
+
+    if (!jobSnapshot) {
+      return res.status(404).json({ error: "Job snapshot not found." });
+    }
+
+    if (monitorQueue) {
+      await monitorQueue.add('resume-tailoring', {
+        userId,
+        company: companyName,
+        jobSnapshot
+      });
+      return res.status(202).json({ message: "Resume tailoring job queued successfully." });
+    } else {
+      return res.status(503).json({ error: "Job queue is not active." });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // START EXPRESS SERVER
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

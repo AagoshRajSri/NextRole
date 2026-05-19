@@ -197,7 +197,21 @@ export default defineBackground(() => {
     }
   };
 
-  // Start polling
+  // 1. Establish persistent alarm routine
+  browser.runtime.onInstalled.addListener(() => {
+    console.log("📡 NextRole Core Engine Activated.");
+    browser.alarms.create("POLL_INSTANT_ALERTS", {
+      periodInMinutes: 15 // Frequency of headless background checks
+    });
+  });
+
+  // 2. Listen for the alarm trigger
+  browser.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === "POLL_INSTANT_ALERTS") {
+      await pollForNewJobs();
+    }
+  });
+
+  // Run immediately once on boot
   pollForNewJobs();
-  setInterval(pollForNewJobs, POLL_INTERVAL);
 });

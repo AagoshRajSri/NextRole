@@ -35,13 +35,15 @@ model JobSnapshot {
 }
 
 model UserProfile {
-  id         String   @id @default(uuid())
-  userId     String   @unique
-  experience String   @db.Text
-  skills     String   @db.Text
-  education  String   @db.Text
-  projects   String   @db.Text
-  updatedAt  DateTime @updatedAt
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  experience      String   @db.Text
+  skills          String   @db.Text
+  education       String   @db.Text
+  projects        String   @db.Text
+  isPremium       Boolean  @default(false)
+  monthlyRunsUsed Int      @default(0)
+  updatedAt       DateTime @updatedAt
 }
 
 model TailoredResume {
