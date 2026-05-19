@@ -1,4 +1,4 @@
-# ⚡ NextRole — Cyber Careers Co-pilot ⚡
+# ⚡ NextRole — Never Miss Out⚡
 
 <div align="center">
   <img src="./assets/icon.png" alt="NextRole Banner" width="128" style="border-radius: 20px; margin-bottom: 15px;" onError="this.style.display='none'" />
