@@ -376,10 +376,9 @@ async function injectSidePanel() {
 
 async function updatePanelData(panel: HTMLElement, currentUrl: string, company: string) {
   const actionContainer = panel.querySelector('#nr-action-container');
-  const premiumContainer = panel.querySelector('#nr-premium-container');
   const countSpan = panel.querySelector('#nr-tracked-pages-count');
 
-  if (!actionContainer || !premiumContainer) return;
+  if (!actionContainer) return;
 
   // Retrieve user storage details
   const storage = (await browser.storage.local.get(['userId', 'savedSearches'])) as any;
