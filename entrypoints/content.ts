@@ -380,234 +380,256 @@ async function updatePanelData(panel: HTMLElement, currentUrl: string, company: 
 
   if (!actionContainer) return;
 
-  // Retrieve user storage details
-  const storage = (await browser.storage.local.get(['userId', 'savedSearches'])) as any;
-  const userId = storage.userId || 'default-user';
-  const savedSearches = storage.savedSearches || [];
+  try {
+    // Retrieve user storage details safely
+    let userId = 'default-user';
+    let savedSearches: any[] = [];
+    
+    try {
+      const storage = (await browser.storage.local.get(['userId', 'savedSearches'])) as any;
+      userId = storage.userId || 'default-user';
+      savedSearches = storage.savedSearches || [];
+    } catch (storageErr) {
+      console.warn('[NextRole] browser.storage.local not available, using fallbacks:', storageErr);
+    }
 
-  // Update total count display
-  if (countSpan) {
-    countSpan.textContent = `${savedSearches.length} channels online`;
-  }
+    // Update total count display
+    if (countSpan) {
+      countSpan.textContent = `${savedSearches.length} channels online`;
+    }
 
-  // ----------------------------------------------------
-  // A. RENDER TRACKING STATUS
-  // ----------------------------------------------------
-  const isTracked = savedSearches.some((s: any) => s.url === currentUrl);
+    // ----------------------------------------------------
+    // A. RENDER TRACKING STATUS
+    // ----------------------------------------------------
+    const isTracked = savedSearches.some((s: any) => s.url === currentUrl);
 
-  if (isTracked) {
-    actionContainer.innerHTML = `
-      <div style="background: rgba(0, 200, 81, 0.04); border: 1px solid rgba(0, 200, 81, 0.25); border-radius: 12px; padding: 14px; text-align: center; display: flex; flex-direction: column; gap: 6px; box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.02);">
-        <div style="color: #00c851; font-family: var(--mono); font-weight: 700; font-size: 11.5px; display: flex; align-items: center; justify-content: center; gap: 6px; letter-spacing: 0.5px;">
-          <span style="background-color: #00c851; width: 6px; height: 6px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #00c851;"></span>
-          [ MONITORING STATUS: ACTIVE ]
+    if (isTracked) {
+      actionContainer.innerHTML = `
+        <div style="background: rgba(0, 200, 81, 0.04); border: 1px solid rgba(0, 200, 81, 0.25); border-radius: 12px; padding: 14px; text-align: center; display: flex; flex-direction: column; gap: 6px; box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.02);">
+          <div style="color: #00c851; font-family: var(--mono); font-weight: 700; font-size: 11.5px; display: flex; align-items: center; justify-content: center; gap: 6px; letter-spacing: 0.5px;">
+            <span style="background-color: #00c851; width: 6px; height: 6px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #00c851;"></span>
+            [ MONITORING STATUS: ACTIVE ]
+          </div>
+          <p style="font-size: 11px; color: var(--muted); margin: 0; line-height: 1.45;">NextRole is currently auditing this channel in the background. System-level desktop alerts will launch as jobs release.</p>
         </div>
-        <p style="font-size: 11px; color: var(--muted); margin: 0; line-height: 1.45;">NextRole is currently auditing this channel in the background. System-level desktop alerts will launch as jobs release.</p>
-      </div>
-    `;
-  } else {
-    actionContainer.innerHTML = `
-      <button id="nr-track-action-btn" style="width: 100%; background: var(--yellow); border: none; border-radius: 10px; color: #000000; font-family: var(--mono); font-weight: 700; font-size: 12px; padding: 12px; cursor: pointer; transition: all 0.25s ease; box-shadow: 0 4px 14px rgba(240, 255, 0, 0.25); outline: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 8px; letter-spacing: 0.5px; margin-top: 4px;">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 12h14"></path>
-          <path d="M12 5v14"></path>
-        </svg>
-        CONNECT CHANNEL FEED
-      </button>
-    `;
+      `;
+    } else {
+      actionContainer.innerHTML = `
+        <button id="nr-track-action-btn" style="width: 100%; background: var(--yellow); border: none; border-radius: 10px; color: #000000; font-family: var(--mono); font-weight: 700; font-size: 12px; padding: 12px; cursor: pointer; transition: all 0.25s ease; box-shadow: 0 4px 14px rgba(240, 255, 0, 0.25); outline: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 8px; letter-spacing: 0.5px; margin-top: 4px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"></path>
+            <path d="M12 5v14"></path>
+          </svg>
+          CONNECT CHANNEL FEED
+        </button>
+      `;
 
-    // Hook up tracking click listener
-    const trackBtn = panel.querySelector('#nr-track-action-btn') as HTMLElement;
-    trackBtn?.addEventListener('mouseenter', () => {
-      trackBtn.style.transform = 'translateY(-1.5px)';
-      trackBtn.style.boxShadow = '0 6px 18px rgba(240, 255, 0, 0.45)';
-      trackBtn.style.background = '#ffffff';
-    });
-    trackBtn?.addEventListener('mouseleave', () => {
-      trackBtn.style.transform = 'translateY(0)';
-      trackBtn.style.boxShadow = '0 4px 14px rgba(240, 255, 0, 0.25)';
-      trackBtn.style.background = 'var(--yellow)';
-    });
+      // Hook up tracking click listener
+      const trackBtn = panel.querySelector('#nr-track-action-btn') as HTMLElement;
+      trackBtn?.addEventListener('mouseenter', () => {
+        trackBtn.style.transform = 'translateY(-1.5px)';
+        trackBtn.style.boxShadow = '0 6px 18px rgba(240, 255, 0, 0.45)';
+        trackBtn.style.background = '#ffffff';
+      });
+      trackBtn?.addEventListener('mouseleave', () => {
+        trackBtn.style.transform = 'translateY(0)';
+        trackBtn.style.boxShadow = '0 4px 14px rgba(240, 255, 0, 0.25)';
+        trackBtn.style.background = 'var(--yellow)';
+      });
 
-    trackBtn?.addEventListener('click', async () => {
-      trackBtn.setAttribute('disabled', 'true');
-      trackBtn.textContent = 'LINKING TERMINAL...';
+      trackBtn?.addEventListener('click', async () => {
+        trackBtn.setAttribute('disabled', 'true');
+        trackBtn.textContent = 'LINKING TERMINAL...';
 
-      try {
-        // 1. Sync to local storage
-        const currentData = (await browser.storage.local.get('savedSearches')) as any;
-        const currentSearches = currentData.savedSearches || [];
-        const exists = currentSearches.some((s: any) => s.url === currentUrl);
-        if (!exists) {
-          currentSearches.push({
-            id: Date.now().toString(),
-            companyName: company,
-            url: currentUrl,
-            createdAt: Date.now()
-          });
-          await browser.storage.local.set({ savedSearches: currentSearches });
-        }
-
-        // 2. Sync to Express PostgreSQL database via background delegation
         try {
-          await safeBackendFetch('http://localhost:5000/api/tracked-searches', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-User-Id': userId
-            },
-            body: {
+          // 1. Sync to local storage safely
+          let currentSearches: any[] = [];
+          try {
+            const currentData = (await browser.storage.local.get('savedSearches')) as any;
+            currentSearches = currentData.savedSearches || [];
+          } catch (e) {
+            console.warn('[NextRole] Could not get savedSearches from storage during click:', e);
+          }
+          
+          const exists = currentSearches.some((s: any) => s.url === currentUrl);
+          if (!exists) {
+            currentSearches.push({
+              id: Date.now().toString(),
+              companyName: company,
               url: currentUrl,
-              platform: currentUrl.includes('greenhouse.io') 
-                ? 'Greenhouse' 
-                : currentUrl.includes('lever.co') 
-                  ? 'Lever' 
-                  : currentUrl.includes('myworkdayjobs.com')
-                    ? 'Workday'
-                    : currentUrl.includes('linkedin.com')
-                      ? 'LinkedIn'
-                      : 'Custom Board'
+              createdAt: Date.now()
+            });
+            try {
+              await browser.storage.local.set({ savedSearches: currentSearches });
+            } catch (e) {
+              console.warn('[NextRole] Could not save searches to storage during click:', e);
+            }
+          }
+
+          // 2. Sync to Express PostgreSQL database via background delegation
+          try {
+            await safeBackendFetch('http://localhost:5000/api/tracked-searches', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-User-Id': userId
+              },
+              body: {
+                url: currentUrl,
+                platform: currentUrl.includes('greenhouse.io') 
+                  ? 'Greenhouse' 
+                  : currentUrl.includes('lever.co') 
+                    ? 'Lever' 
+                    : currentUrl.includes('myworkdayjobs.com')
+                      ? 'Workday'
+                      : currentUrl.includes('linkedin.com')
+                        ? 'LinkedIn'
+                        : 'Custom Board'
+              }
+            });
+          } catch (backendErr) {
+            console.warn('[NextRole] Backend offline. Tracked locally only.', backendErr);
+          }
+
+          // Success animation update
+          trackBtn.style.background = '#00c851';
+          trackBtn.style.color = '#ffffff';
+          trackBtn.style.boxShadow = '0 4px 14px rgba(0, 200, 81, 0.35)';
+          trackBtn.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            [ SECURELY LINKED ]
+          `;
+
+          setTimeout(async () => {
+            // Re-render complete panel details
+            await updatePanelData(panel, currentUrl, company);
+          }, 1300);
+
+        } catch (err) {
+          console.error('[NextRole] Click track failed:', err);
+          trackBtn.removeAttribute('disabled');
+          trackBtn.textContent = 'CONNECT CHANNEL FEED';
+        }
+      });
+    }
+
+    // ----------------------------------------------------
+    // C. RENDER TAILORED RESUME PREVIEW / DOWNLOAD
+    // ----------------------------------------------------
+    const resumeContainer = panel.querySelector('#nr-resume-container');
+    if (resumeContainer) {
+      try {
+        const resumeRes = await safeBackendFetch(`http://localhost:5000/api/resumes/lookup?url=${encodeURIComponent(currentUrl)}`, {
+          headers: { 'X-User-Id': userId }
+        });
+        if (resumeRes && resumeRes.success && resumeRes.data) {
+          const { snapshot, resume } = resumeRes.data;
+          const pdfDownloadUrl = `http://localhost:5000${resume.pdfUrl}`;
+
+          // Render the Holographic Resume Card!
+          resumeContainer.innerHTML = `
+            <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(99, 102, 241, 0.08) 100%); border: 1.5px solid rgba(139, 92, 246, 0.35); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 8px 24px -8px rgba(139, 92, 246, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.05); position: relative; box-sizing: border-box; width: 100%;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <span style="font-family: 'Space Grotesk', monospace; font-size: 9px; font-weight: 700; color: #a78bfa; letter-spacing: 0.5px; display: flex; align-items: center; gap: 5px;">
+                  <span style="background-color: #a78bfa; width: 6px; height: 6px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #a78bfa;"></span>
+                  [ ✨ AI TAILORED RESUME READY ]
+                </span>
+              </div>
+              
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <div style="font-size: 12.5px; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 230px;">
+                  ${escapeHtml(snapshot.title)}
+                </div>
+                <div style="font-size: 10.5px; color: #94a3b8; display: flex; align-items: center; gap: 4px;">
+                  <span>📍 ${escapeHtml(snapshot.location)}</span>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 8px; margin-top: 4px;">
+                <button id="nr-download-resume-btn" style="flex: 1; background: rgba(139, 92, 246, 0.12); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; color: #c084fc; font-family: 'Space Grotesk', monospace; font-weight: 700; font-size: 10.5px; padding: 8px 10px; cursor: pointer; transition: all 0.2s ease; outline: none; display: flex; align-items: center; justify-content: center; gap: 5px; box-sizing: border-box; height: 32px;">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  DOWNLOAD
+                </button>
+                <button id="nr-preview-resume-btn" style="flex: 1; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; color: #cbd5e1; font-family: 'Space Grotesk', monospace; font-weight: 700; font-size: 10.5px; padding: 8px 10px; cursor: pointer; transition: all 0.2s ease; outline: none; display: flex; align-items: center; justify-content: center; gap: 5px; box-sizing: border-box; height: 32px;">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                  PREVIEW
+                </button>
+              </div>
+
+              <!-- Preview Drawer Content (Hidden initially) -->
+              <div id="nr-resume-preview-drawer" style="display: none; max-height: 200px; overflow-y: auto; background: rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; padding: 10px; margin-top: 6px; font-size: 9.5px; line-height: 1.45; color: #cbd5e1; font-family: monospace; box-sizing: border-box; width: 100%; text-align: left;">
+                ${resume.resumeText}
+              </div>
+            </div>
+          `;
+
+          // Action: Download button
+          const dlBtn = resumeContainer.querySelector('#nr-download-resume-btn') as HTMLElement;
+          dlBtn?.addEventListener('mouseenter', () => {
+            dlBtn.style.background = 'rgba(139, 92, 246, 0.2)';
+            dlBtn.style.borderColor = 'rgba(139, 92, 246, 0.45)';
+          });
+          dlBtn?.addEventListener('mouseleave', () => {
+            dlBtn.style.background = 'rgba(139, 92, 246, 0.12)';
+            dlBtn.style.borderColor = 'rgba(139, 92, 246, 0.3)';
+          });
+          dlBtn?.addEventListener('click', () => {
+            if (typeof browser !== 'undefined' && browser.runtime?.id) {
+              browser.runtime.sendMessage({ action: 'openTab', url: pdfDownloadUrl });
             }
           });
-        } catch (backendErr) {
-          console.warn('[NextRole] Backend offline. Tracked locally only.', backendErr);
-        }
 
-        // Success animation update
-        trackBtn.style.background = '#00c851';
-        trackBtn.style.color = '#ffffff';
-        trackBtn.style.boxShadow = '0 4px 14px rgba(0, 200, 81, 0.35)';
-        trackBtn.innerHTML = `
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"></polyline>
-          </svg>
-          [ SECURELY LINKED ]
-        `;
-
-        setTimeout(async () => {
-          // Re-render complete panel details
-          await updatePanelData(panel, currentUrl, company);
-        }, 1300);
-
-      } catch (err) {
-        console.error('[NextRole] Click track failed:', err);
-        trackBtn.removeAttribute('disabled');
-        trackBtn.textContent = 'CONNECT CHANNEL FEED';
-      }
-    });
-  }
-
-  // ----------------------------------------------------
-  // C. RENDER TAILORED RESUME PREVIEW / DOWNLOAD
-  // ----------------------------------------------------
-  const resumeContainer = panel.querySelector('#nr-resume-container');
-  if (resumeContainer) {
-    try {
-      const resumeRes = await safeBackendFetch(`http://localhost:5000/api/resumes/lookup?url=${encodeURIComponent(currentUrl)}`, {
-        headers: { 'X-User-Id': userId }
-      });
-      if (resumeRes && resumeRes.success && resumeRes.data) {
-        const { snapshot, resume } = resumeRes.data;
-        const pdfDownloadUrl = `http://localhost:5000${resume.pdfUrl}`;
-
-        // Render the Holographic Resume Card!
-        resumeContainer.innerHTML = `
-          <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(99, 102, 241, 0.08) 100%); border: 1.5px solid rgba(139, 92, 246, 0.35); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 8px 24px -8px rgba(139, 92, 246, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.05); position: relative; box-sizing: border-box; width: 100%;">
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-              <span style="font-family: 'Space Grotesk', monospace; font-size: 9px; font-weight: 700; color: #a78bfa; letter-spacing: 0.5px; display: flex; align-items: center; gap: 5px;">
-                <span style="background-color: #a78bfa; width: 6px; height: 6px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #a78bfa;"></span>
-                [ ✨ AI TAILORED RESUME READY ]
-              </span>
-            </div>
-            
-            <div style="display: flex; flex-direction: column; gap: 2px;">
-              <div style="font-size: 12.5px; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 230px;">
-                ${escapeHtml(snapshot.title)}
-              </div>
-              <div style="font-size: 10.5px; color: #94a3b8; display: flex; align-items: center; gap: 4px;">
-                <span>📍 ${escapeHtml(snapshot.location)}</span>
-              </div>
-            </div>
-
-            <div style="display: flex; gap: 8px; margin-top: 4px;">
-              <button id="nr-download-resume-btn" style="flex: 1; background: rgba(139, 92, 246, 0.12); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; color: #c084fc; font-family: 'Space Grotesk', monospace; font-weight: 700; font-size: 10.5px; padding: 8px 10px; cursor: pointer; transition: all 0.2s ease; outline: none; display: flex; align-items: center; justify-content: center; gap: 5px; box-sizing: border-box; height: 32px;">
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="7 10 12 15 17 10"></polyline>
-                  <line x1="12" y1="15" x2="12" y2="3"></line>
-                </svg>
-                DOWNLOAD
-              </button>
-              <button id="nr-preview-resume-btn" style="flex: 1; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; color: #cbd5e1; font-family: 'Space Grotesk', monospace; font-weight: 700; font-size: 10.5px; padding: 8px 10px; cursor: pointer; transition: all 0.2s ease; outline: none; display: flex; align-items: center; justify-content: center; gap: 5px; box-sizing: border-box; height: 32px;">
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-                PREVIEW
-              </button>
-            </div>
-
-            <!-- Preview Drawer Content (Hidden initially) -->
-            <div id="nr-resume-preview-drawer" style="display: none; max-height: 200px; overflow-y: auto; background: rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; padding: 10px; margin-top: 6px; font-size: 9.5px; line-height: 1.45; color: #cbd5e1; font-family: monospace; box-sizing: border-box; width: 100%; text-align: left;">
-              ${resume.resumeText}
-            </div>
-          </div>
-        `;
-
-        // Action: Download button
-        const dlBtn = resumeContainer.querySelector('#nr-download-resume-btn') as HTMLElement;
-        dlBtn?.addEventListener('mouseenter', () => {
-          dlBtn.style.background = 'rgba(139, 92, 246, 0.2)';
-          dlBtn.style.borderColor = 'rgba(139, 92, 246, 0.45)';
-        });
-        dlBtn?.addEventListener('mouseleave', () => {
-          dlBtn.style.background = 'rgba(139, 92, 246, 0.12)';
-          dlBtn.style.borderColor = 'rgba(139, 92, 246, 0.3)';
-        });
-        dlBtn?.addEventListener('click', () => {
-          if (typeof browser !== 'undefined' && browser.runtime?.id) {
-            browser.runtime.sendMessage({ action: 'openTab', url: pdfDownloadUrl });
-          }
-        });
-
-        // Action: Preview button toggling
-        const prvBtn = resumeContainer.querySelector('#nr-preview-resume-btn') as HTMLElement;
-        const drawer = resumeContainer.querySelector('#nr-resume-preview-drawer') as HTMLElement;
-        prvBtn?.addEventListener('mouseenter', () => {
-          prvBtn.style.background = 'rgba(255, 255, 255, 0.06)';
-          prvBtn.style.borderColor = 'rgba(255, 255, 255, 0.15)';
-        });
-        prvBtn?.addEventListener('mouseleave', () => {
-          prvBtn.style.background = 'rgba(255, 255, 255, 0.02)';
-          prvBtn.style.borderColor = 'rgba(255, 255, 255, 0.08)';
-        });
-        prvBtn?.addEventListener('click', () => {
-          if (drawer.style.display === 'none') {
-            drawer.style.display = 'block';
-            prvBtn.textContent = 'HIDE';
-            prvBtn.style.color = '#a78bfa';
-            prvBtn.style.borderColor = 'rgba(139, 92, 246, 0.3)';
-          } else {
-            drawer.style.display = 'none';
-            prvBtn.textContent = 'PREVIEW';
-            prvBtn.style.color = '#cbd5e1';
+          // Action: Preview button toggling
+          const prvBtn = resumeContainer.querySelector('#nr-preview-resume-btn') as HTMLElement;
+          const drawer = resumeContainer.querySelector('#nr-resume-preview-drawer') as HTMLElement;
+          prvBtn?.addEventListener('mouseenter', () => {
+            prvBtn.style.background = 'rgba(255, 255, 255, 0.06)';
+            prvBtn.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+          });
+          prvBtn?.addEventListener('mouseleave', () => {
+            prvBtn.style.background = 'rgba(255, 255, 255, 0.02)';
             prvBtn.style.borderColor = 'rgba(255, 255, 255, 0.08)';
-          }
-        });
+          });
+          prvBtn?.addEventListener('click', () => {
+            if (drawer.style.display === 'none') {
+              drawer.style.display = 'block';
+              prvBtn.textContent = 'HIDE';
+              prvBtn.style.color = '#a78bfa';
+              prvBtn.style.borderColor = 'rgba(139, 92, 246, 0.3)';
+            } else {
+              drawer.style.display = 'none';
+              prvBtn.textContent = 'PREVIEW';
+              prvBtn.style.color = '#cbd5e1';
+              prvBtn.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+            }
+          });
 
-      } else {
-        // Fallback default info notice
-        resumeContainer.innerHTML = `
-          <div style="background: rgba(139, 92, 246, 0.04); border: 1px dashed rgba(139, 92, 246, 0.18); border-radius: 10px; padding: 11px 13px; font-size: 11px; color: var(--muted); line-height: 1.45; display: flex; flex-direction: column; gap: 3px; box-sizing: border-box; width: 100%;">
-            <strong style="color: #cbd5e1; font-family: var(--mono); font-size: 11px; letter-spacing: 0.2px;">💡 AUTOMATED ATS COMPILER</strong>
-            <span>Navigate into any distinct job listing detail page. Co-pilot will automatically compile a tailored A4 PDF resume!</span>
-          </div>
-        `;
+        } else {
+          // Fallback default info notice
+          resumeContainer.innerHTML = `
+            <div style="background: rgba(139, 92, 246, 0.04); border: 1px dashed rgba(139, 92, 246, 0.18); border-radius: 10px; padding: 11px 13px; font-size: 11px; color: var(--muted); line-height: 1.45; display: flex; flex-direction: column; gap: 3px; box-sizing: border-box; width: 100%;">
+              <strong style="color: #cbd5e1; font-family: var(--mono); font-size: 11px; letter-spacing: 0.2px;">💡 AUTOMATED ATS COMPILER</strong>
+              <span>Navigate into any distinct job listing detail page. Co-pilot will automatically compile a tailored A4 PDF resume!</span>
+            </div>
+          `;
+        }
+      } catch (err) {
+        console.warn('[NextRole] Resume lookup failed:', err);
       }
-    } catch (err) {
-      console.warn('[NextRole] Resume lookup failed:', err);
     }
+  } catch (err) {
+    console.error('[NextRole] Fatal error in updatePanelData:', err);
   }
+}
 }
 
 function injectFloatingTrigger() {
