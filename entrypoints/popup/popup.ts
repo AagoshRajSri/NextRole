@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────
-//  NextRole Popup — System Console v2
+//  NextRole Popup — System Console v3
 // ─────────────────────────────────────────────────────────
 
 interface SavedSearch { id: string; companyName: string; url: string; createdAt: number; }
+interface WatchlistEntry { id: string; company: string; role: string; createdAt: number; }
 
 interface MonitorConfig {
   active: boolean;
@@ -30,6 +31,94 @@ let config: MonitorConfig = { ...DEFAULT_CONFIG };
 // ── Boot ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await ensureUserId();
+  
+  const isOnboarded = await checkOnboarding();
+  if (!isOnboarded) {
+    return; // Wait for user to complete onboarding
+  }
+  
+  await bootApp();
+});
+
+// ── Smart Onboarding ───────────────────────────────────
+// Checks masterProfile AND monitorConfig. If monitorConfig already
+// has roles/stack data (user already configured the monitoring tab),
+// we auto-create masterProfile from it and skip onboarding entirely.
+async function checkOnboarding(): Promise<boolean> {
+  const data = await browser.storage.local.get(['masterProfile', 'monitorConfig']) as any;
+  
+  // Already onboarded
+  if (data?.masterProfile?.isOnboarded) {
+    return true;
+  }
+  
+  // Auto-populate from existing monitorConfig if it has real data
+  const mc = data?.monitorConfig;
+  if (mc && (mc.roles?.length > 0 || mc.stack?.length > 0)) {
+    const masterProfile = {
+      isOnboarded: true,
+      roles: mc.roles || [],
+      stack: mc.stack || [],
+      experience: 'Intern / Entry-Level',
+      locations: mc.location ? [mc.location] : ['bangalore']
+    };
+    await browser.storage.local.set({ masterProfile });
+    console.log('[NextRole] Auto-populated masterProfile from existing monitorConfig. Skipping onboarding.');
+    return true;
+  }
+  
+  // Show onboarding overlay
+  document.getElementById('onboarding-overlay')?.classList.add('active');
+  
+  // Wire save button
+  const btn = document.getElementById('ob-save-btn');
+  btn?.addEventListener('click', async () => {
+    const rolesStr = (document.getElementById('ob-roles') as HTMLInputElement).value || '';
+    const stackStr = (document.getElementById('ob-stack') as HTMLInputElement).value || '';
+    const exp = (document.getElementById('ob-experience') as HTMLSelectElement).value || 'Intern / Entry-Level';
+    
+    // get checked locations
+    const cbs = document.querySelectorAll('.ob-cb input:checked');
+    const locs: string[] = [];
+    cbs.forEach(cb => locs.push((cb as HTMLInputElement).value));
+    
+    const roles = rolesStr ? rolesStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const stack = stackStr ? stackStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    
+    const masterProfile = {
+      isOnboarded: true,
+      roles,
+      stack,
+      experience: exp,
+      locations: locs.length > 0 ? locs : []
+    };
+    
+    await browser.storage.local.set({ masterProfile });
+    
+    // Also seed monitorConfig with the same data so monitoring tab is pre-filled
+    const seedConfig: MonitorConfig = {
+      ...DEFAULT_CONFIG,
+      roles,
+      stack,
+      location: locs[0] || 'anywhere-india',
+    };
+    await browser.storage.local.set({ monitorConfig: seedConfig });
+    config = seedConfig;
+    
+    // hide overlay
+    document.getElementById('onboarding-overlay')?.classList.remove('active');
+    
+    // emit signal
+    browser.runtime.sendMessage({ action: 'MASTER_PROFILE_MUTATED', profile: masterProfile });
+    
+    // boot the rest of the app
+    await bootApp();
+  });
+  
+  return false;
+}
+
+async function bootApp() {
   await loadConfig();
 
   renderUI();
@@ -39,13 +128,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   wireToggles();
   wireLaunchBtn();
   wireProfileForm();
+  wireWatchlist();
 
   // Kick off career feed render
   await renderChannelList();
+  await renderWatchlist();
 
   // Live latency measurement
   measureLatency();
-});
+}
 
 // ── User ID ────────────────────────────────────────────
 async function ensureUserId() {
@@ -70,6 +161,29 @@ async function loadConfig() {
 
 async function saveConfig() {
   await browser.storage.local.set({ monitorConfig: config });
+  
+  // Bidirectional sync: keep masterProfile in sync with monitoring config
+  await syncMasterProfile();
+}
+
+// Sync monitoring config changes into masterProfile so content script
+// scoring always uses the latest roles/stack/locations
+async function syncMasterProfile() {
+  const d = await browser.storage.local.get('masterProfile') as any;
+  const existing = d?.masterProfile || {};
+  
+  const updated = {
+    ...existing,
+    isOnboarded: true,
+    roles: config.roles,
+    stack: config.stack,
+    locations: existing.locations || [config.location],
+  };
+  
+  await browser.storage.local.set({ masterProfile: updated });
+  
+  // Notify content scripts
+  browser.runtime.sendMessage({ action: 'MASTER_PROFILE_MUTATED', profile: updated }).catch(() => {});
 }
 
 // ── Render all UI from state ────────────────────────────
@@ -241,7 +355,10 @@ function wireNavTabs() {
       document.querySelectorAll<HTMLElement>('.view').forEach(v => v.classList.remove('active'));
       document.getElementById(viewId)?.classList.add('active');
 
-      if (btn.dataset.view === 'career-feed') renderChannelList();
+      if (btn.dataset.view === 'career-feed') {
+        renderChannelList();
+        renderWatchlist();
+      }
       if (btn.dataset.view === 'architect') loadProfileData();
     });
   });
@@ -305,6 +422,98 @@ async function renderChannelList() {
   });
 }
 
+// ── Company Watchlist ───────────────────────────────────
+function wireWatchlist() {
+  const addBtn = document.getElementById('wl-add-btn');
+  if (!addBtn) return;
+
+  addBtn.addEventListener('click', async () => {
+    const companyInput = document.getElementById('wl-company') as HTMLInputElement;
+    const roleInput = document.getElementById('wl-role') as HTMLInputElement;
+    if (!companyInput || !roleInput) return;
+
+    const company = companyInput.value.trim();
+    const role = roleInput.value.trim();
+    if (!company && !role) return;
+
+    const entry: WatchlistEntry = {
+      id: `wl-${Date.now()}`,
+      company: company || '',
+      role: role || '',
+      createdAt: Date.now()
+    };
+
+    const d = await browser.storage.local.get('companyWatchlist') as any;
+    const list: WatchlistEntry[] = d?.companyWatchlist ?? [];
+    list.push(entry);
+    await browser.storage.local.set({ companyWatchlist: list });
+
+    companyInput.value = '';
+    roleInput.value = '';
+
+    await renderWatchlist();
+  });
+
+  // Enter key support on both inputs
+  const companyInput = document.getElementById('wl-company') as HTMLInputElement;
+  const roleInput = document.getElementById('wl-role') as HTMLInputElement;
+  const triggerAdd = (e: KeyboardEvent) => { if (e.key === 'Enter') addBtn.click(); };
+  companyInput?.addEventListener('keydown', triggerAdd);
+  roleInput?.addEventListener('keydown', triggerAdd);
+}
+
+async function renderWatchlist() {
+  const container = document.getElementById('wl-list');
+  const countEl = document.getElementById('wl-count');
+  if (!container) return;
+
+  const d = await browser.storage.local.get('companyWatchlist') as any;
+  const list: WatchlistEntry[] = d?.companyWatchlist ?? [];
+
+  if (countEl) countEl.textContent = `${list.length} WATCHING`;
+
+  if (list.length === 0) {
+    container.innerHTML = `<div class="empty-state" style="padding: 16px;">No watchlist entries yet.<br/>Add a company + role to get notified.</div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+  const sorted = [...list].sort((a, b) => b.createdAt - a.createdAt);
+
+  sorted.forEach(entry => {
+    const card = document.createElement('div');
+    card.className = 'channel-card';
+    const initial = entry.company ? entry.company.charAt(0).toUpperCase() : '🎯';
+    const label = [entry.company, entry.role].filter(Boolean).join(' — ');
+    card.innerHTML = `
+      <div class="channel-av" style="background: rgba(240,255,0,0.08); border-color: rgba(240,255,0,0.25); color: var(--yellow);">${escHtml(String(initial))}</div>
+      <div class="channel-info">
+        <div class="channel-name">${escHtml(entry.company || 'Any Company')}</div>
+        <div class="channel-url" style="color: var(--yellow);">${escHtml(entry.role || 'Any Role')}</div>
+      </div>
+      <div class="ch-actions">
+        <button class="ch-btn del" title="Remove" data-id="${entry.id}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    `;
+
+    card.querySelector('.del')?.addEventListener('click', async () => {
+      card.style.opacity = '0';
+      card.style.transform = 'scale(0.95)';
+      card.style.transition = 'all 0.25s ease';
+      setTimeout(async () => {
+        const cur = await browser.storage.local.get('companyWatchlist') as any;
+        const updated = ((cur?.companyWatchlist ?? []) as WatchlistEntry[]).filter(x => x.id !== entry.id);
+        await browser.storage.local.set({ companyWatchlist: updated });
+        await renderWatchlist();
+      }, 250);
+    });
+
+    container.appendChild(card);
+  });
+}
+
 // ── Architect / Profile ─────────────────────────────────
 async function loadProfileData() {
   try {
@@ -356,8 +565,10 @@ async function measureLatency() {
     await fetch('http://localhost:5000/api/health', { method: 'GET' });
     const ms = Date.now() - t0;
     el.textContent = `LATENCY: ${ms}MS`;
+    el.style.color = ms < 100 ? '#00c851' : ms < 300 ? '#ffb700' : '#f87171';
   } catch {
     el.textContent = `LATENCY: --MS`;
+    el.style.color = '#f87171';
   }
 }
 

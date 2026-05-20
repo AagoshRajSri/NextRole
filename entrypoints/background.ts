@@ -49,6 +49,16 @@ export default defineBackground(() => {
     const userId = await getUserId();
     
     try {
+      const storage = await browser.storage.local.get('monitorConfig') as any;
+      const cfg = storage.monitorConfig;
+
+      if (!cfg || !cfg.active) {
+        console.log('[Background] Monitor is inactive. Skipping background alert polling.');
+        return;
+      }
+
+      const alertsEnabled = cfg.instantAlerts ?? true;
+
       const response = await fetch('http://localhost:5000/api/new-jobs', {
         headers: {
           'X-User-Id': userId,
@@ -66,15 +76,33 @@ export default defineBackground(() => {
 
       console.log(`[Background] Polled backend: ${newJobs.length} new jobs detected!`);
 
-      // Trigger native notification for each job
+      // Load company watchlist
+      const wlStorage = await browser.storage.local.get('companyWatchlist') as any;
+      const watchlist: any[] = wlStorage?.companyWatchlist ?? [];
+
+      // Trigger native notification for each job matching user filters OR watchlist
       for (const job of newJobs) {
+        const matchesFilters = jobMatchesConfig(job, cfg);
+        const watchlistMatch = checkWatchlistMatch(job, watchlist);
+
+        if (!matchesFilters && !watchlistMatch) {
+          continue;
+        }
+        if (!alertsEnabled) {
+          console.log(`[Background] Alerts disabled. Skipping alert for "${job.title}".`);
+          continue;
+        }
+
         const notificationId = `job-alert-${job.id}-${Date.now()}`;
         notificationUrls.set(notificationId, job.url);
 
+        const isWatchlist = watchlistMatch && !matchesFilters;
         browser.notifications.create(notificationId, {
           type: 'basic',
-          iconUrl: '/icon/128.png', // Uses WXT auto-packaged extension icon
-          title: `🚨 New Job Alert: ${job.companyName}`,
+          iconUrl: '/icon/128.png',
+          title: isWatchlist
+            ? `🎯 Watchlist Hit: ${job.companyName}`
+            : `🚨 New Match: ${job.companyName}`,
           message: `${job.title}\n📍 ${job.location}`,
           buttons: [
             { title: 'Apply Now →' }
@@ -85,6 +113,28 @@ export default defineBackground(() => {
     } catch (err) {
       console.warn('[Background] Connection to NextRole backend failed. Will retry. Error details:', err);
     }
+  }
+
+  // Check if a job matches any entry in the company watchlist
+  function checkWatchlistMatch(job: any, watchlist: any[]): boolean {
+    if (!watchlist || watchlist.length === 0) return false;
+    const jobTitle = (job.title ?? '').toLowerCase();
+    const jobCompany = (job.companyName ?? '').toLowerCase();
+
+    return watchlist.some((entry: any) => {
+      const wCompany = (entry.company ?? '').toLowerCase().trim();
+      const wRole = (entry.role ?? '').toLowerCase().trim();
+
+      // If both are specified, both must match
+      if (wCompany && wRole) {
+        return jobCompany.includes(wCompany) && jobTitle.includes(wRole);
+      }
+      // If only company, match any role at that company
+      if (wCompany) return jobCompany.includes(wCompany);
+      // If only role, match that role at any company
+      if (wRole) return jobTitle.includes(wRole);
+      return false;
+    });
   }
 
   // Handle notification button clicks to redirect to application page
@@ -168,6 +218,20 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (message.action === 'MASTER_PROFILE_MUTATED') {
+      console.log('[Background] Master profile updated. Refreshing active content scripts...');
+      // Broadcast to all tabs so content scripts re-score with new profile data
+      browser.tabs.query({}).then(tabs => {
+        for (const tab of tabs) {
+          if (tab.id) {
+            browser.tabs.sendMessage(tab.id, { action: 'MASTER_PROFILE_MUTATED' }).catch(() => {});
+          }
+        }
+      });
+      sendResponse({ success: true });
+      return true;
+    }
+
     if (message.action === 'fetchBackend') {
       const { url, method, headers, body } = message;
       fetch(url, {
@@ -234,36 +298,7 @@ export default defineBackground(() => {
     }
   });
 
-  // Override pollForNewJobs to respect keyword config
-  const _origPoll = pollForNewJobs;
-  (globalThis as any).__nrPollOverride = async function() {
-    const userId = await getUserId();
-    try {
-      const response = await fetch('http://localhost:5000/api/new-jobs', {
-        headers: { 'X-User-Id': userId, 'Accept': 'application/json' }
-      });
-      if (!response.ok) return;
-      const newJobs: any[] = await response.json();
-      if (!newJobs?.length) return;
 
-      for (const job of newJobs) {
-        if (!jobMatchesConfig(job, monitorConfig)) continue;
-        if (!alertsEnabled) continue;
-        const notificationId = `job-alert-${job.id}-${Date.now()}`;
-        notificationUrls.set(notificationId, job.url);
-        browser.notifications.create(notificationId, {
-          type: 'basic',
-          iconUrl: '/icon/128.png',
-          title: `🚨 New Match: ${job.companyName}`,
-          message: `${job.title}\n📍 ${job.location}`,
-          buttons: [{ title: 'Apply Now →' }],
-          priority: 2
-        });
-      }
-    } catch (err) {
-      console.warn('[Background] Poll failed:', err);
-    }
-  };
 
   // 1. Establish persistent alarm routine
   browser.runtime.onInstalled.addListener(() => {

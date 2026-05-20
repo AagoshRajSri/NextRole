@@ -35,7 +35,7 @@ model JobSnapshot {
   url             String           // Direct URL to apply
   firstSeenAt     DateTime         @default(now())
   isNew           Boolean          @default(true) // Helper to track if the extension has polled it yet
-  jobEmbedding    Unsupported("vector(1536)")?
+  jobEmbedding    Unsupported("vector(1024)")?
   semanticScore   Float?
   tailoredResumes TailoredResume[]
 
@@ -49,7 +49,7 @@ model UserProfile {
   skills           String   @db.Text
   education        String   @db.Text
   projects         String   @db.Text
-  profileEmbedding Unsupported("vector(1536)")?
+  profileEmbedding Unsupported("vector(1024)")?
   isPremium        Boolean  @default(false)
   monthlyRunsUsed  Int      @default(0)
   updatedAt        DateTime @updatedAt

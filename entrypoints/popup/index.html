@@ -483,9 +483,179 @@
     }
     .monitor-status.show { display: flex; }
     .ms-dot { width: 6px; height: 6px; border-radius: 50%; background: #00c851; box-shadow: 0 0 8px #00c851; animation: pulse 1.5s infinite; }
+
+    /* ── WATCHLIST ── */
+    .wl-input-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+    .wl-input-row input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      padding: 7px 10px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 10px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .wl-input-row input:focus { border-color: rgba(240,255,0,0.3); }
+    .wl-input-row input::placeholder { color: var(--muted); }
+    .wl-add-btn {
+      background: rgba(240,255,0,0.08);
+      border: 1px solid rgba(240,255,0,0.25);
+      border-radius: 7px;
+      color: var(--yellow);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      padding: 7px 12px;
+      cursor: pointer;
+      transition: all .2s;
+      outline: none;
+      white-space: nowrap;
+    }
+    .wl-add-btn:hover { background: rgba(240,255,0,0.15); border-color: var(--yellow); }
+
+    /* ── ONBOARDING ── */
+    .onboarding-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg);
+      z-index: 1000;
+      display: none;
+      flex-direction: column;
+      padding: 0;
+      overflow-y: auto;
+    }
+    .onboarding-overlay.active { display: flex; }
+    .onboarding-content {
+      background: var(--bg);
+      border: none;
+      border-radius: 0;
+      padding: 24px 20px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      flex: 1;
+      min-height: 100%;
+    }
+    .ob-header {
+      text-align: center;
+      padding: 18px 0 6px;
+      border-bottom: 1px solid var(--border);
+      margin: -24px -20px 0;
+      padding: 20px 20px 14px;
+      background: var(--surface);
+    }
+    .ob-header .logo { font-size: 20px; letter-spacing: 3px; margin-bottom: 4px; }
+    .onboarding-sub { font-family: var(--mono); font-size: 10px; color: var(--cyan); text-align: center; margin: 0; }
+    .ob-section-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .ob-section-label svg { color: var(--cyan); flex-shrink: 0; }
+    .ob-checkbox-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+    .ob-cb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--text);
+      cursor: pointer;
+      padding: 7px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      transition: all 0.2s;
+    }
+    .ob-cb:hover { border-color: var(--border); background: var(--surface2); }
+    .ob-cb input { accent-color: var(--cyan); cursor: pointer; width: 14px; height: 14px; }
+    .ob-spacer { flex: 1; }
+    #ob-save-btn {
+      margin-top: auto;
+      background: linear-gradient(135deg, #00f0ff, #0088ff);
+      color: #000;
+      box-shadow: 0 4px 20px rgba(0,240,255,0.35);
+      font-size: 12.5px;
+      padding: 14px;
+      letter-spacing: 1px;
+    }
+    #ob-save-btn:hover {
+      box-shadow: 0 6px 28px rgba(0,240,255,0.55);
+      transform: translateY(-1px);
+    }
   </style>
 </head>
 <body>
+  <!-- ONBOARDING OVERLAY -->
+  <div id="onboarding-overlay" class="onboarding-overlay">
+    <div class="onboarding-content">
+      <div class="ob-header">
+        <div class="logo">// SYSTEM INIT</div>
+        <p class="onboarding-sub">Configure your Master Profile to begin scanning</p>
+      </div>
+      
+      <div class="ob-section-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        TARGETED ROLES
+      </div>
+      <div class="form-group">
+        <input type="text" id="ob-roles" placeholder="e.g. Frontend Engineer, SDE, Software Intern" />
+      </div>
+
+      <div class="ob-section-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        TECH STACK CORE
+      </div>
+      <div class="form-group">
+        <input type="text" id="ob-stack" placeholder="e.g. React, Node.js, Python, TypeScript" />
+      </div>
+      
+      <div class="ob-section-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        EXPERIENCE HORIZON LEVEL
+      </div>
+      <div class="form-group">
+        <div class="loc-wrap">
+          <select class="loc-select" id="ob-experience">
+            <option value="Intern / Entry-Level">Intern / Entry-Level</option>
+            <option value="Associate / Mid-Level">Associate / Mid-Level</option>
+            <option value="Senior / Lead">Senior / Lead</option>
+          </select>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+      </div>
+
+      <div class="ob-section-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        TARGET LOCATIONS (INDIAN HUBS)
+      </div>
+      <div class="ob-checkbox-grid">
+        <label class="ob-cb"><input type="checkbox" value="bangalore" checked> <span>Bangalore</span></label>
+        <label class="ob-cb"><input type="checkbox" value="mumbai"> <span>Mumbai</span></label>
+        <label class="ob-cb"><input type="checkbox" value="delhi"> <span>Delhi / NCR</span></label>
+        <label class="ob-cb"><input type="checkbox" value="hyderabad"> <span>Hyderabad</span></label>
+        <label class="ob-cb"><input type="checkbox" value="pune"> <span>Pune</span></label>
+        <label class="ob-cb"><input type="checkbox" value="remote"> <span>Remote</span></label>
+      </div>
+      
+      <div class="ob-spacer"></div>
+      <button class="save-btn" id="ob-save-btn">[// REBOOT SYSTEM SYSTEM CONFIG]</button>
+    </div>
+  </div>
+
   <!-- HEADER -->
   <div class="hdr">
     <div class="logo">NextRole</div>
@@ -621,6 +791,24 @@
     <div id="channel-list">
       <div class="empty-state">No channels tracked yet.<br/>Visit a job board and click Track.</div>
     </div>
+
+    <!-- Company Watchlist -->
+    <div class="section-hdr" style="margin-top: 10px;">
+      <span>🎯 COMPANY WATCHLIST</span>
+      <span class="slot-badge" id="wl-count" style="background: rgba(240,255,0,0.08); border-color: rgba(240,255,0,0.2); color: var(--yellow);">0 WATCHING</span>
+    </div>
+    <div class="param-group" style="gap: 8px;">
+      <div class="param-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        ADD COMPANY + ROLE TO WATCH
+      </div>
+      <div class="wl-input-row">
+        <input id="wl-company" type="text" placeholder="Company name..." />
+        <input id="wl-role" type="text" placeholder="Role title..." />
+        <button class="wl-add-btn" id="wl-add-btn">+ ADD</button>
+      </div>
+    </div>
+    <div id="wl-list"></div>
   </div>
 
   <!-- VIEW: ARCHITECT -->

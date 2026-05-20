@@ -8,6 +8,7 @@ import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 
 dotenv.config();
 
@@ -23,6 +24,47 @@ const io = new SocketIOServer(httpServer, {
 });
 app.use(express.json());
 
+const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
+
+async function generateBedrockEmbedding(text: string): Promise<number[]> {
+  try {
+    const command = new InvokeModelCommand({
+      modelId: 'amazon.titan-embed-text-v2:0',
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({ inputText: text.substring(0, 8000) })
+    });
+    const response = await bedrock.send(command);
+    const jsonString = new TextDecoder().decode(response.body);
+    const parsed = JSON.parse(jsonString);
+    return parsed.embedding || [];
+  } catch (err) {
+    console.error('[Server/Bedrock] Embedding Generation Failed:', err);
+    return [];
+  }
+}
+
+function getCompanyNameFromUrl(targetUrl: string): string {
+  try {
+    const urlObj = new URL(targetUrl);
+    const hostname = urlObj.hostname.toLowerCase();
+    
+    if (hostname.includes('greenhouse.io')) {
+      const parts = urlObj.pathname.split('/');
+      if (parts[1]) return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
+    } else if (hostname.includes('lever.co')) {
+      const parts = urlObj.pathname.split('/');
+      if (parts[1]) return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
+    } else if (hostname.includes('myworkdayjobs.com')) {
+      const parts = hostname.split('.');
+      return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+    }
+    return hostname;
+  } catch (e) {
+    return 'Company Portal';
+  }
+}
+
 // Serve generated PDFs statically
 app.use('/resumes', express.static(path.join(__dirname, 'public/resumes')));
 
@@ -35,6 +77,10 @@ app.use((req, res, next) => {
     return res.sendStatus(200);
   }
   next();
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: Date.now() });
 });
 
 
@@ -212,11 +258,7 @@ app.get('/api/new-jobs', async (req, res) => {
 
     res.json(newJobs.map(job => ({
       id: job.id,
-      companyName: job.trackedSearch.url.includes('workday') 
-        ? 'Workday' 
-        : job.trackedSearch.url.includes('greenhouse') 
-          ? 'Greenhouse Board' 
-          : 'Lever Board',
+      companyName: getCompanyNameFromUrl(job.trackedSearch.url),
       title: job.title,
       location: job.location,
       url: job.url,
@@ -256,6 +298,12 @@ app.post('/api/profile', async (req, res) => {
   const { experience, skills, education, projects } = req.body;
 
   try {
+    const profileText = `${experience || ''} ${skills || ''} ${education || ''} ${projects || ''}`.trim();
+    let embedding: number[] = [];
+    if (profileText) {
+      embedding = await generateBedrockEmbedding(profileText);
+    }
+
     const profile = await prisma.userProfile.upsert({
       where: { userId },
       update: {
@@ -272,6 +320,16 @@ app.post('/api/profile', async (req, res) => {
         projects: projects || ''
       }
     });
+
+    if (embedding.length > 0) {
+      await prisma.$executeRawUnsafe(
+        `UPDATE "UserProfile" SET "profileEmbedding" = $1::vector WHERE "userId" = $2`,
+        `[${embedding.join(',')}]`,
+        userId
+      );
+      console.log(`[Server] Updated profile embedding for user: ${userId}`);
+    }
+
     res.json(profile);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
