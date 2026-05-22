@@ -3,845 +3,502 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NextRole Co-pilot</title>
-  <meta name="manifest.type" content="browser_action" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <title>NextRole</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
   <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
     :root {
-      --bg: #051424;
-      --surface: #0d1c2d;
-      --surface2: #0a1628;
-      --border: rgba(0,240,255,0.12);
-      --border2: rgba(255,255,255,0.06);
-      --yellow: #f0ff00;
-      --yellow-dim: rgba(240,255,0,0.12);
-      --cyan: #00f0ff;
-      --cyan-dim: rgba(0,240,255,0.1);
-      --text: #e2eaf4;
-      --muted: #4a6080;
-      --font: 'Space Grotesk', sans-serif;
-      --mono: 'JetBrains Mono', monospace;
+      --bg: #F4F4F0;
+      --surface: #FFFFFF;
+      --card: #FFFFFF;
+      --border: #000000;
+      --cyan: #4A90E2;
+      --cyan-dim: #2C6EBA;
+      --green: #2ecc71;
+      --amber: #f1c40f;
+      --red: #e74c3c;
+      --pink: #ff6b81;
+      --purple: #9b59b6;
+      --text: #000000;
+      --muted: #444444;
+      --mono: 'IBM Plex Mono', monospace;
+      --display: 'Syne', sans-serif;
+      --shadow: 3px 3px 0px #000000;
+      --shadow-hover: 5px 5px 0px #000000;
+      --border-width: 2px;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
-      width: 400px;
-      min-height: 580px;
+      width: 380px;
+      min-height: 200px;
+      max-height: 580px;
       background: var(--bg);
       color: var(--text);
-      font-family: var(--font);
-      overflow-x: hidden;
-      overflow-y: auto;
-    }
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(0,240,255,0.15); border-radius: 4px; }
-
-    /* ── HEADER ── */
-    .hdr {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 10px 16px 0;
-    }
-    .logo {
-      text-align: center;
       font-family: var(--mono);
-      font-size: 18px;
-      font-weight: 700;
-      color: var(--yellow);
-      letter-spacing: 2px;
-      text-shadow: 0 0 18px rgba(240,255,0,0.45);
-      padding-bottom: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      background-image: radial-gradient(#000 1px, transparent 1px);
+      background-size: 15px 15px;
     }
-    .tab-bar {
-      display: flex;
-      gap: 0;
-    }
-    .tab-bar button {
-      flex: 1;
-      background: none;
-      border: none;
-      color: var(--muted);
-      font-family: var(--font);
-      font-size: 11px;
-      font-weight: 600;
-      padding: 8px 4px;
-      cursor: pointer;
-      position: relative;
-      transition: color .2s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      outline: none;
-    }
-    .tab-bar button.active { color: var(--yellow); }
-    .tab-bar button.active::after {
-      content: '';
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      height: 2px;
-      background: var(--yellow);
-      border-radius: 2px 2px 0 0;
-      box-shadow: 0 0 8px var(--yellow);
-    }
-    .tab-bar button:not(.active):hover { color: var(--cyan); }
 
-    /* ── VIEWS ── */
-    .view { display: none; flex-direction: column; gap: 10px; padding: 12px 14px; }
-    .view.active { display: flex; }
-
-    /* ── STATUS CARD ── */
-    .status-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
+    /* ── Header ── */
+    .popup-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-    }
-    .status-left { display: flex; flex-direction: column; gap: 3px; }
-    .status-label {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--cyan);
-      font-weight: 700;
-      letter-spacing: 0.5px;
-    }
-    .status-name { font-size: 13px; font-weight: 700; color: var(--text); }
-    .status-link {
-      font-family: var(--mono);
-      font-size: 9.5px;
-      color: var(--muted);
-      text-decoration: none;
-      cursor: pointer;
-    }
-    .status-link:hover { color: var(--cyan); }
-    .status-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--cyan);
-      box-shadow: 0 0 8px var(--cyan);
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0%,100% { box-shadow: 0 0 6px var(--cyan); }
-      50% { box-shadow: 0 0 14px var(--cyan); }
-    }
-
-    /* ── SEGMENTED CONTROL ── */
-    .seg {
-      display: flex;
+      height: 56px;
+      padding: 0 16px;
+      border-bottom: 3px solid var(--border);
       background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 3px;
-      gap: 3px;
-    }
-    .seg button {
-      flex: 1;
-      background: none;
-      border: none;
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 10px;
-      font-weight: 700;
-      padding: 7px;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all .2s;
-      outline: none;
-      letter-spacing: 0.3px;
-    }
-    .seg button.active {
-      background: var(--yellow-dim);
-      border: 1px solid rgba(240,255,0,0.3);
-      color: var(--yellow);
-    }
-
-    /* ── PARAM GROUP ── */
-    .param-group {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-    }
-    .param-label {
-      font-family: var(--mono);
-      font-size: 9px;
-      font-weight: 700;
-      color: var(--muted);
-      letter-spacing: 0.8px;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    .param-label svg { color: var(--cyan); flex-shrink: 0; }
-    .tags-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
-    .tag {
-      background: rgba(240,255,0,0.08);
-      border: 1px solid rgba(240,255,0,0.25);
-      color: var(--yellow);
-      font-family: var(--mono);
-      font-size: 10px;
-      font-weight: 600;
-      padding: 3px 8px;
-      border-radius: 5px;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    .tag .rm {
-      cursor: pointer;
-      color: rgba(240,255,0,0.5);
-      font-size: 12px;
-      line-height: 1;
-      transition: color .15s;
-    }
-    .tag .rm:hover { color: var(--yellow); }
-    .tag-input-row {
-      display: flex;
-      align-items: center;
-      background: var(--bg);
-      border: 1px solid var(--border2);
-      border-radius: 7px;
-      padding: 5px 8px;
-      gap: 6px;
-    }
-    .tag-input-row input {
-      flex: 1;
-      background: none;
-      border: none;
-      outline: none;
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 10px;
-    }
-    .tag-input-row input::placeholder { color: var(--muted); }
-    .tag-input-row button {
-      background: none;
-      border: none;
-      color: var(--cyan);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      padding: 0;
-      outline: none;
-      transition: color .15s;
-    }
-    .tag-input-row button:hover { color: var(--yellow); }
-
-    /* location select */
-    .loc-select {
-      width: 100%;
-      background: var(--bg);
-      border: 1px solid var(--border2);
-      border-radius: 7px;
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 10px;
-      padding: 7px 10px;
-      outline: none;
-      cursor: pointer;
-      appearance: none;
-    }
-    .loc-wrap { position: relative; }
-    .loc-wrap svg {
-      position: absolute;
-      right: 8px; top: 50%;
-      transform: translateY(-50%);
-      color: var(--cyan);
-      pointer-events: none;
-    }
-
-    /* ── TOGGLES ── */
-    .toggles-group {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .toggle-label {
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 7px;
-    }
-    .toggle-label svg { color: var(--yellow); flex-shrink: 0; }
-    .toggle-switch {
-      width: 40px; height: 22px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 11px;
-      position: relative;
-      cursor: pointer;
-      transition: background .25s;
       flex-shrink: 0;
     }
-    .toggle-switch.on { background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 10px rgba(0,240,255,0.4); }
-    .toggle-switch.amber.on { background: #f97316; border-color: #f97316; box-shadow: 0 0 10px rgba(249,115,22,0.4); }
+    .logo {
+      font-family: var(--display);
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .logo span { background: var(--cyan); padding: 0 4px; border: 2px solid #000; color: #fff; }
+    
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .status-pill {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: 0;
+      font-size: 11px; font-weight: 800; letter-spacing: 1px;
+      border: 2px solid #000;
+      box-shadow: 2px 2px 0 #000;
+    }
+    .status-pill.live {
+      background: var(--green);
+      color: #000;
+    }
+    .status-pill.paused {
+      background: #ccc;
+      color: #000;
+    }
+    .status-dot { width: 8px; height: 8px; background: currentColor; border: 1px solid #000; }
+    .status-pill.live .status-dot { animation: blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── Tab bar ── */
+    .tab-bar {
+      display: flex;
+      border-bottom: 3px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .tab-btn {
+      flex: 1;
+      height: 44px;
+      background: none;
+      border: none;
+      border-right: 2px solid var(--border);
+      color: var(--text);
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.15s;
+      position: relative;
+    }
+    .tab-btn:last-child { border-right: none; }
+    .tab-btn:hover { background: var(--amber); }
+    .tab-btn.active { background: var(--pink); color: #fff; }
+    .tab-badge {
+      position: absolute; top: 4px; right: 4px;
+      background: var(--cyan); color: #fff;
+      font-size: 10px; font-weight: 800;
+      padding: 2px 6px; border: 2px solid #000;
+      min-width: 20px; text-align: center;
+      box-shadow: 2px 2px 0 #000;
+    }
+
+    /* ── Scrollable content ── */
+    .popup-body {
+      height: calc(580px - 56px - 44px - 40px); /* adjusted for footer */
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 16px;
+    }
+    .popup-body::-webkit-scrollbar { width: 6px; }
+    .popup-body::-webkit-scrollbar-track { background: var(--surface); border-left: 2px solid #000; }
+    .popup-body::-webkit-scrollbar-thumb { background: var(--cyan); border: 2px solid #000; }
+
+    /* ── Tab panels ── */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; animation: popIn 0.2s ease-out; }
+
+    /* ── Section ── */
+    .section { margin-bottom: 20px; }
+    .section-label {
+      font-family: var(--display);
+      font-size: 12px; font-weight: 800;
+      color: var(--text); text-transform: uppercase;
+      background: var(--amber); display: inline-block;
+      padding: 2px 6px; border: 2px solid #000;
+      margin-bottom: 8px;
+    }
+
+    /* ── Status card ── */
+    .status-card {
+      background: var(--card);
+      border: 2px solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .status-info { flex: 1; }
+    .status-main {
+      display: flex; align-items: center; gap: 8px;
+      font-family: var(--display); font-size: 16px; font-weight: 800; color: var(--text);
+      text-transform: uppercase; margin-bottom: 6px;
+    }
+    .status-main .live-badge {
+      font-size: 10px; font-weight: 800;
+      padding: 2px 8px;
+      background: var(--green); color: #000;
+      border: 2px solid #000; box-shadow: 2px 2px 0 #000;
+    }
+    .status-main .paused-badge {
+      font-size: 10px; font-weight: 800;
+      padding: 2px 8px;
+      background: #ccc; color: #000;
+      border: 2px solid #000; box-shadow: 2px 2px 0 #000;
+    }
+    .status-meta { font-size: 11px; font-weight: 700; color: var(--text); }
+    
+    .toggle-switch {
+      width: 44px; height: 24px;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle-switch.on { background: var(--green); }
     .toggle-switch::after {
       content: '';
       position: absolute;
-      top: 2px; left: 2px;
-      width: 16px; height: 16px;
-      border-radius: 50%;
-      background: #fff;
-      transition: left .25s;
+      top: 1px; left: 1px;
+      width: 18px; height: 18px;
+      background: #000;
+      transition: transform 0.2s;
     }
-    .toggle-switch.on::after { left: 20px; }
+    .toggle-switch.on::after { transform: translateX(20px); }
 
-    /* ── MONITOR SECTION HEADER ── */
-    .section-hdr {
+    /* ── Tag input ── */
+    .tag-input-wrap {
+      background: var(--card);
+      border: 2px solid var(--border);
+      padding: 8px;
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-family: var(--mono);
-      font-size: 9.5px;
-      font-weight: 700;
-      color: var(--muted);
-      letter-spacing: 0.8px;
-    }
-    .slot-badge {
-      background: var(--cyan-dim);
-      border: 1px solid rgba(0,240,255,0.2);
-      color: var(--cyan);
-      font-family: var(--mono);
-      font-size: 9px;
-      padding: 2px 8px;
-      border-radius: 4px;
-    }
-
-    /* ── LAUNCH BUTTON ── */
-    #launch-btn {
-      width: 100%;
-      background: var(--yellow);
-      border: none;
-      border-radius: 10px;
-      color: #000;
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 700;
-      padding: 13px;
-      cursor: pointer;
-      letter-spacing: 1px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      flex-wrap: wrap;
       gap: 8px;
-      outline: none;
-      transition: all .25s;
-      box-shadow: 0 0 20px rgba(240,255,0,0.3);
-      margin-top: 2px;
+      min-height: 44px;
+      cursor: text;
+      transition: transform 0.1s;
     }
-    #launch-btn:hover {
-      box-shadow: 0 0 32px rgba(240,255,0,0.55);
-      transform: translateY(-1px);
+    .tag-input-wrap:focus-within { box-shadow: var(--shadow); transform: translate(-2px, -2px); }
+    
+    .tag-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: var(--purple); border: 2px solid #000;
+      color: #fff; font-size: 11px; font-weight: 700;
+      padding: 4px 8px; box-shadow: 2px 2px 0 #000;
     }
-    #launch-btn:active { transform: translateY(0); }
-    #launch-btn.active-state {
-      background: #00c851;
-      box-shadow: 0 0 24px rgba(0,200,81,0.45);
+    .tag-x {
+      cursor: pointer; color: #000; background: #fff;
+      font-size: 12px; font-weight: 800; border: 1px solid #000;
+      padding: 0 4px; transition: background 0.1s;
     }
+    .tag-x:hover { background: var(--red); color: #fff; }
+    
+    .tag-inner-input {
+      border: none; background: transparent;
+      outline: none; color: var(--text);
+      font-family: var(--mono); font-size: 13px; font-weight: 700;
+      min-width: 80px; flex: 1;
+    }
+    .tag-inner-input::placeholder { color: #888; font-style: italic; }
 
-    /* ── STATUS BAR ── */
-    .status-bar {
+    /* ── Segmented control ── */
+    .segmented {
+      display: flex;
+      background: var(--card);
+      border: 2px solid var(--border);
+      box-shadow: 2px 2px 0 #000;
+    }
+    .seg-btn {
+      flex: 1; padding: 10px 4px;
+      background: none; border: none;
+      color: var(--text);
+      font-family: var(--display); font-size: 11px; font-weight: 800; text-transform: uppercase;
+      cursor: pointer; transition: all 0.15s;
+      border-right: 2px solid var(--border);
+    }
+    .seg-btn:last-child { border-right: none; }
+    .seg-btn.active { background: var(--cyan); color: #fff; }
+    .seg-btn:hover:not(.active) { background: var(--amber); }
+
+    /* ── Footer meta ── */
+    .popup-footer {
+      padding: 0 16px; height: 40px;
+      border-top: 3px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      font-size: 11px; font-weight: 700;
+      color: var(--text);
       background: var(--surface);
-      border-top: 1px solid var(--border2);
-      padding: 7px 14px;
-      font-family: var(--mono);
-      font-size: 9px;
-      color: var(--muted);
-      letter-spacing: 0.5px;
+      position: absolute; bottom: 0; left: 0; right: 0;
     }
-    .status-bar .left { color: var(--text); }
-    .status-bar .right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: #f87171;
-    }
-    .status-bar .enc { color: var(--muted); }
+    .latency-badge { display: flex; align-items: center; gap: 6px; }
+    .latency-dot { width: 10px; height: 10px; border: 2px solid #000; }
+    .latency-dot.green { background: var(--green); }
+    .latency-dot.yellow { background: var(--amber); }
+    .latency-dot.red { background: var(--red); }
+    .manage-link { color: var(--text); background: var(--amber); border: 2px solid #000; padding: 2px 8px; cursor: pointer; font-family: var(--display); text-transform: uppercase; box-shadow: 2px 2px 0 #000; transition: transform 0.1s; }
+    .manage-link:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 #000; background: var(--cyan); color: #fff; }
 
-    /* ── CAREER FEED / ARCHITECT views ── */
-    .channel-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      transition: border-color .2s;
+    /* ── Watched Pages ── */
+    .add-page-banner {
+      background: var(--pink);
+      border: 2px solid #000; box-shadow: var(--shadow);
+      padding: 12px; margin-bottom: 20px;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
     }
-    .channel-card:hover { border-color: rgba(0,240,255,0.25); }
-    .channel-av {
+    .add-page-banner-text { font-size: 12px; font-weight: 700; color: #fff; flex: 1; }
+    .btn-add-page {
+      background: #fff; color: #000;
+      border: 2px solid #000; box-shadow: 2px 2px 0 #000;
+      padding: 6px 12px;
+      font-family: var(--display); font-size: 11px; font-weight: 800; text-transform: uppercase;
+      cursor: pointer; white-space: nowrap; transition: transform 0.1s; flex-shrink: 0;
+    }
+    .btn-add-page:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 #000; background: var(--cyan); }
+    
+    .watched-list { display: flex; flex-direction: column; gap: 12px; }
+    .watched-row {
+      background: var(--card);
+      border: 2px solid var(--border); box-shadow: 2px 2px 0 #000;
+      padding: 12px; display: flex; align-items: center; gap: 12px;
+    }
+    .watched-row.error { background: #ffeaa7; }
+    .favicon-avatar {
       width: 32px; height: 32px;
-      border-radius: 8px;
-      background: var(--cyan-dim);
-      border: 1px solid rgba(0,240,255,0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--cyan);
-      flex-shrink: 0;
-    }
-    .channel-info { flex: 1; min-width: 0; }
-    .channel-name { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .channel-url { font-family: var(--mono); font-size: 9px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-    .channel-url:hover { color: var(--cyan); }
-    .ch-actions { display: flex; gap: 5px; }
-    .ch-btn {
-      background: none;
-      border: 1px solid var(--border2);
-      border-radius: 6px;
-      width: 26px; height: 26px;
+      background: var(--amber); border: 2px solid #000;
       display: flex; align-items: center; justify-content: center;
-      cursor: pointer;
-      color: var(--muted);
-      transition: all .15s;
-      outline: none;
+      font-family: var(--display); font-size: 16px; font-weight: 800; color: #000;
+      flex-shrink: 0; box-shadow: 2px 2px 0 #000;
     }
-    .ch-btn:hover { border-color: rgba(0,240,255,0.3); color: var(--cyan); }
-    .ch-btn.del:hover { border-color: rgba(248,113,113,0.3); color: #f87171; }
+    .watched-info { flex: 1; min-width: 0; }
+    .watched-domain { font-family: var(--display); font-size: 14px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; }
+    .watched-meta { font-size: 10px; font-weight: 700; margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+    .scrape-dot { width: 8px; height: 8px; border: 2px solid #000; flex-shrink: 0; }
+    .scrape-dot.ok { background: var(--green); }
+    .scrape-dot.error { background: var(--red); }
+    .scrape-dot.pending { background: #ccc; }
+    
+    .new-badge {
+      font-size: 10px; font-weight: 800;
+      padding: 2px 6px; background: var(--pink); color: #fff;
+      border: 2px solid #000; box-shadow: 2px 2px 0 #000; white-space: nowrap;
+    }
+    .btn-trash {
+      background: #fff; border: 2px solid #000;
+      color: #000; cursor: pointer;
+      font-size: 14px; padding: 4px; box-shadow: 2px 2px 0 #000;
+      transition: background 0.15s; flex-shrink: 0;
+    }
+    .btn-trash:hover { background: var(--red); color: #fff; }
 
+    /* ── Empty states ── */
     .empty-state {
       text-align: center;
-      padding: 40px 20px;
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 11px;
-    }
-
-    /* profile form */
-    .form-group { display: flex; flex-direction: column; gap: 4px; }
-    .form-group label { font-family: var(--mono); font-size: 9px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }
-    .form-group input, .form-group textarea {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 8px 10px;
+      padding: 40px 16px;
       color: var(--text);
-      font-family: var(--font);
-      font-size: 11.5px;
-      outline: none;
-      resize: vertical;
-      transition: border-color .2s;
+      font-size: 13px; font-weight: 700;
+      background: var(--card); border: 2px solid #000; box-shadow: 4px 4px 0 #000;
     }
-    .form-group input:focus, .form-group textarea:focus { border-color: rgba(0,240,255,0.3); }
-    .form-group textarea { min-height: 52px; }
-    .save-btn {
-      width: 100%;
-      background: linear-gradient(135deg, #6366f1, #4f46e5);
-      border: none;
-      border-radius: 9px;
-      color: #fff;
-      font-family: var(--mono);
-      font-size: 12px;
-      font-weight: 700;
-      padding: 10px;
-      cursor: pointer;
-      outline: none;
-      transition: all .25s;
-      box-shadow: 0 4px 14px rgba(99,102,241,0.3);
-    }
-    .save-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(99,102,241,0.45); }
+    .empty-state .empty-icon { font-size: 36px; margin-bottom: 12px; display: inline-block; background: var(--cyan); border: 2px solid #000; padding: 8px; box-shadow: 2px 2px 0 #000; }
 
-    .monitor-status {
-      background: rgba(0,200,81,0.06);
-      border: 1px solid rgba(0,200,81,0.2);
-      border-radius: 8px;
-      padding: 10px 12px;
-      font-family: var(--mono);
-      font-size: 10px;
-      color: #00c851;
-      display: none;
-      align-items: center;
-      gap: 7px;
+    /* ── Feed ── */
+    .feed-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
     }
-    .monitor-status.show { display: flex; }
-    .ms-dot { width: 6px; height: 6px; border-radius: 50%; background: #00c851; box-shadow: 0 0 8px #00c851; animation: pulse 1.5s infinite; }
+    .mark-all-btn {
+      background: var(--cyan); color: #fff; border: 2px solid #000;
+      padding: 6px 10px; font-family: var(--display); font-size: 10px; font-weight: 800;
+      text-transform: uppercase; box-shadow: 2px 2px 0 #000; cursor: pointer; transition: transform 0.1s;
+    }
+    .mark-all-btn:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 #000; background: var(--amber); color: #000; }
 
-    /* ── WATCHLIST ── */
-    .wl-input-row {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 2px;
+    .feed-list { display: flex; flex-direction: column; gap: 12px; padding-bottom: 16px; }
+    .feed-card {
+      background: var(--card); border: 2px solid var(--border); box-shadow: 4px 4px 0 #000;
+      padding: 12px; cursor: pointer; transition: transform 0.15s; position: relative;
     }
-    .wl-input-row input {
-      flex: 1;
-      background: var(--bg);
-      border: 1px solid var(--border2);
-      border-radius: 7px;
-      padding: 7px 10px;
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 10px;
-      outline: none;
-      transition: border-color .2s;
-    }
-    .wl-input-row input:focus { border-color: rgba(240,255,0,0.3); }
-    .wl-input-row input::placeholder { color: var(--muted); }
-    .wl-add-btn {
-      background: rgba(240,255,0,0.08);
-      border: 1px solid rgba(240,255,0,0.25);
-      border-radius: 7px;
-      color: var(--yellow);
-      font-family: var(--mono);
-      font-size: 9px;
-      font-weight: 700;
-      padding: 7px 12px;
-      cursor: pointer;
-      transition: all .2s;
-      outline: none;
-      white-space: nowrap;
-    }
-    .wl-add-btn:hover { background: rgba(240,255,0,0.15); border-color: var(--yellow); }
+    .feed-card:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 #000; }
+    .feed-card.unseen { background: #e0f7fa; }
+    .feed-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+    .feed-card-title { font-family: var(--display); font-size: 14px; font-weight: 800; color: var(--text); text-transform: uppercase; padding-right: 8px; }
+    
+    .feed-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .btn-icon { background: #fff; border: 2px solid #000; padding: 2px 6px; cursor: pointer; box-shadow: 2px 2px 0 #000; font-size: 12px; transition: transform 0.1s; }
+    .btn-icon:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 #000; }
+    .btn-snooze:hover { background: var(--amber); }
+    .btn-apply:hover { background: var(--green); }
+    .btn-dismiss:hover { background: var(--red); color: #fff; }
 
-    /* ── ONBOARDING ── */
-    .onboarding-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: var(--bg);
-      z-index: 1000;
-      display: none;
-      flex-direction: column;
-      padding: 0;
-      overflow-y: auto;
+    .feed-card-meta { font-size: 11px; font-weight: 700; color: var(--text); display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .feed-card-meta .dot { font-weight: 800; }
+    .pill-mini { background: var(--purple); color: #fff; padding: 2px 6px; border: 2px solid #000; font-size: 9px; text-transform: uppercase; }
+    
+    .match-badge {
+      display: inline-block; background: var(--cyan); color: #fff;
+      border: 2px solid #000; font-size: 9px; font-weight: 800; text-transform: uppercase;
+      padding: 2px 6px; box-shadow: 2px 2px 0 #000;
     }
-    .onboarding-overlay.active { display: flex; }
-    .onboarding-content {
-      background: var(--bg);
-      border: none;
-      border-radius: 0;
-      padding: 24px 20px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      flex: 1;
-      min-height: 100%;
+    .new-dot { position: absolute; top: -6px; right: -6px; width: 14px; height: 14px; border: 2px solid #000; border-radius: 50%; background: var(--pink); box-shadow: 2px 2px 0 #000; }
+    .time-label { font-size: 10px; font-weight: 700; color: var(--text); margin-left: auto; }
+
+    /* ── Loading ── */
+    .loading-spinner {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 32px; background: var(--card); border: 2px solid #000; box-shadow: 4px 4px 0 #000; gap: 12px; font-size: 14px; font-weight: 800; font-family: var(--display); text-transform: uppercase;
     }
-    .ob-header {
-      text-align: center;
-      padding: 18px 0 6px;
-      border-bottom: 1px solid var(--border);
-      margin: -24px -20px 0;
-      padding: 20px 20px 14px;
-      background: var(--surface);
+    .spinner { width: 24px; height: 24px; border: 3px solid #000; border-top-color: var(--cyan); border-radius: 50%; animation: spin 0.6s linear infinite; }
+    
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%) translateY(20px);
+      background: var(--green); border: 3px solid #000; box-shadow: 4px 4px 0 #000;
+      color: #000; font-family: var(--display); font-size: 12px; font-weight: 800; text-transform: uppercase;
+      padding: 10px 20px; white-space: nowrap; opacity: 0;
+      transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1); pointer-events: none; z-index: 9999;
     }
-    .ob-header .logo { font-size: 20px; letter-spacing: 3px; margin-bottom: 4px; }
-    .onboarding-sub { font-family: var(--mono); font-size: 10px; color: var(--cyan); text-align: center; margin: 0; }
-    .ob-section-label {
-      font-family: var(--mono);
-      font-size: 9px;
-      font-weight: 700;
-      color: var(--muted);
-      letter-spacing: 0.8px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 4px;
-    }
-    .ob-section-label svg { color: var(--cyan); flex-shrink: 0; }
-    .ob-checkbox-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
-    .ob-cb {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-family: var(--mono);
-      font-size: 10.5px;
-      color: var(--text);
-      cursor: pointer;
-      padding: 7px 10px;
-      background: var(--surface);
-      border: 1px solid var(--border2);
-      border-radius: 7px;
-      transition: all 0.2s;
-    }
-    .ob-cb:hover { border-color: var(--border); background: var(--surface2); }
-    .ob-cb input { accent-color: var(--cyan); cursor: pointer; width: 14px; height: 14px; }
-    .ob-spacer { flex: 1; }
-    #ob-save-btn {
-      margin-top: auto;
-      background: linear-gradient(135deg, #00f0ff, #0088ff);
-      color: #000;
-      box-shadow: 0 4px 20px rgba(0,240,255,0.35);
-      font-size: 12.5px;
-      padding: 14px;
-      letter-spacing: 1px;
-    }
-    #ob-save-btn:hover {
-      box-shadow: 0 6px 28px rgba(0,240,255,0.55);
-      transform: translateY(-1px);
-    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
-  <!-- ONBOARDING OVERLAY -->
-  <div id="onboarding-overlay" class="onboarding-overlay">
-    <div class="onboarding-content">
-      <div class="ob-header">
-        <div class="logo">// SYSTEM INIT</div>
-        <p class="onboarding-sub">Configure your Master Profile to begin scanning</p>
+  <!-- Header -->
+  <div class="popup-header">
+    <div class="logo">NEXT<span>ROLE</span></div>
+    <div class="header-right">
+      <div class="status-pill paused" id="header-status-pill">
+        <div class="status-dot"></div>
+        <span id="header-status-text">PAUSED</span>
       </div>
-      
-      <div class="ob-section-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-        TARGETED ROLES
-      </div>
-      <div class="form-group">
-        <input type="text" id="ob-roles" placeholder="e.g. Frontend Engineer, SDE, Software Intern" />
-      </div>
-
-      <div class="ob-section-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-        TECH STACK CORE
-      </div>
-      <div class="form-group">
-        <input type="text" id="ob-stack" placeholder="e.g. React, Node.js, Python, TypeScript" />
-      </div>
-      
-      <div class="ob-section-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        EXPERIENCE HORIZON LEVEL
-      </div>
-      <div class="form-group">
-        <div class="loc-wrap">
-          <select class="loc-select" id="ob-experience">
-            <option value="Intern / Entry-Level">Intern / Entry-Level</option>
-            <option value="Associate / Mid-Level">Associate / Mid-Level</option>
-            <option value="Senior / Lead">Senior / Lead</option>
-          </select>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-        </div>
-      </div>
-
-      <div class="ob-section-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-        TARGET LOCATIONS (INDIAN HUBS)
-      </div>
-      <div class="ob-checkbox-grid">
-        <label class="ob-cb"><input type="checkbox" value="bangalore" checked> <span>Bangalore</span></label>
-        <label class="ob-cb"><input type="checkbox" value="mumbai"> <span>Mumbai</span></label>
-        <label class="ob-cb"><input type="checkbox" value="delhi"> <span>Delhi / NCR</span></label>
-        <label class="ob-cb"><input type="checkbox" value="hyderabad"> <span>Hyderabad</span></label>
-        <label class="ob-cb"><input type="checkbox" value="pune"> <span>Pune</span></label>
-        <label class="ob-cb"><input type="checkbox" value="remote"> <span>Remote</span></label>
-      </div>
-      
-      <div class="ob-spacer"></div>
-      <button class="save-btn" id="ob-save-btn">[// REBOOT SYSTEM SYSTEM CONFIG]</button>
     </div>
   </div>
 
-  <!-- HEADER -->
-  <div class="hdr">
-    <div class="logo">NextRole</div>
-    <div class="tab-bar">
-      <button class="tab-btn active" data-view="monitoring">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-        Monitoring
-      </button>
-      <button class="tab-btn" data-view="career-feed">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-        Career Feed
-      </button>
-      <button class="tab-btn" data-view="architect">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/></svg>
-        Architect
-      </button>
-    </div>
-  </div>
-
-  <!-- VIEW: MONITORING -->
-  <div id="view-monitoring" class="view active">
-    <!-- System Status -->
-    <div class="status-card">
-      <div class="status-left">
-        <div class="status-label">// SYSTEM ACTIVE</div>
-        <div class="status-name" id="user-display-name">Aagosh Raj Srivastava</div>
-        <a class="status-link" id="linkedin-link" href="#" target="_blank">∞ linkedin.com/in/aagoshraj...</a>
-      </div>
-      <div class="status-dot"></div>
-    </div>
-
-    <!-- Monitor Status Banner (shows when active) -->
-    <div class="monitor-status" id="monitor-status">
-      <div class="ms-dot"></div>
-      <span>MONITOR ACTIVE — scanning job boards</span>
-    </div>
-
-    <!-- Keyword / All Jobs segmented -->
-    <div class="seg">
-      <button class="seg-btn active" data-mode="keywords" id="seg-keywords">TRACK KEYWORDS</button>
-      <button class="seg-btn" data-mode="all" id="seg-all">TRACK ALL JOBS</button>
-    </div>
-
-    <!-- Targeted Monitoring header -->
-    <div class="section-hdr">
-      <span>⚡ TARGETED MONITORING</span>
-      <span class="slot-badge" id="slot-badge">0/10 SLOTS</span>
-    </div>
-
-    <!-- Roles / Titles -->
-    <div class="param-group" id="roles-group">
-      <div class="param-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-        ROLES / TITLES
-      </div>
-      <div class="tags-wrap" id="roles-tags"></div>
-      <div class="tag-input-row">
-        <input id="roles-input" type="text" placeholder="Add role keyword..." />
-        <button id="roles-add">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-        </button>
-      </div>
-    </div>
-
-    <!-- Languages / Stack -->
-    <div class="param-group" id="stack-group">
-      <div class="param-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-        LANGUAGES / STACK
-      </div>
-      <div class="tags-wrap" id="stack-tags"></div>
-      <div class="tag-input-row">
-        <input id="stack-input" type="text" placeholder="Add tech stack..." />
-        <button id="stack-add">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-        </button>
-      </div>
-    </div>
-
-    <!-- Location Preference -->
-    <div class="param-group">
-      <div class="param-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-        LOCATION PREFERENCE
-      </div>
-      <div class="loc-wrap">
-        <select class="loc-select" id="location-select">
-          <option value="anywhere-india">Anywhere in India</option>
-          <option value="remote">Remote (Worldwide)</option>
-          <option value="bangalore">Bangalore, India</option>
-          <option value="mumbai">Mumbai, India</option>
-          <option value="delhi">Delhi / NCR, India</option>
-          <option value="hyderabad">Hyderabad, India</option>
-          <option value="pune">Pune, India</option>
-          <option value="us-remote">Remote (US)</option>
-          <option value="anywhere">Anywhere (Global)</option>
-        </select>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-      </div>
-    </div>
-
-    <!-- System Toggles -->
-    <div class="toggles-group">
-      <div class="toggle-row">
-        <div class="toggle-label">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          Auto-Apply Filter
-        </div>
-        <div class="toggle-switch amber" id="toggle-autoapply" data-key="autoApply"></div>
-      </div>
-      <div class="toggle-row">
-        <div class="toggle-label">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          Instant Latency Alerts
-        </div>
-        <div class="toggle-switch on" id="toggle-alerts" data-key="instantAlerts"></div>
-      </div>
-    </div>
-
-    <!-- LAUNCH BUTTON -->
-    <button id="launch-btn">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l-4 4 4 4M15 13l4-4-4-4M13 4l-2 16"/></svg>
-      LAUNCH MONITOR
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="monitor">Monitor</button>
+    <button class="tab-btn" data-tab="watched">
+      Watched Pages
+    </button>
+    <button class="tab-btn" data-tab="feed" id="feed-tab-btn">
+      Feed
+      <span class="tab-badge" id="feed-badge" style="display:none;"></span>
     </button>
   </div>
 
-  <!-- VIEW: CAREER FEED -->
-  <div id="view-career-feed" class="view">
-    <div class="section-hdr">
-      <span>📡 SAVED CHANNELS</span>
-      <span class="slot-badge" id="channel-count">0 TRACKED</span>
-    </div>
-    <div id="channel-list">
-      <div class="empty-state">No channels tracked yet.<br/>Visit a job board and click Track.</div>
-    </div>
-
-    <!-- Company Watchlist -->
-    <div class="section-hdr" style="margin-top: 10px;">
-      <span>🎯 COMPANY WATCHLIST</span>
-      <span class="slot-badge" id="wl-count" style="background: rgba(240,255,0,0.08); border-color: rgba(240,255,0,0.2); color: var(--yellow);">0 WATCHING</span>
-    </div>
-    <div class="param-group" style="gap: 8px;">
-      <div class="param-label">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-        ADD COMPANY + ROLE TO WATCH
+  <!-- Body -->
+  <div class="popup-body">
+    <!-- ── TAB 1: MONITOR ── -->
+    <div class="tab-panel active" id="tab-monitor">
+      <div class="status-card">
+        <div class="status-info">
+          <div class="status-main">
+            <span id="monitor-status-label">Monitoring</span>
+            <span id="monitor-badge" class="paused-badge">PAUSED</span>
+          </div>
+          <div class="status-meta" id="monitor-meta">—</div>
+        </div>
+        <div class="toggle-switch" id="monitor-toggle"></div>
       </div>
-      <div class="wl-input-row">
-        <input id="wl-company" type="text" placeholder="Company name..." />
-        <input id="wl-role" type="text" placeholder="Role title..." />
-        <button class="wl-add-btn" id="wl-add-btn">+ ADD</button>
+
+      <div class="section">
+        <div class="section-label">Roles / Keywords</div>
+        <div class="tag-input-wrap" id="roles-wrap">
+          <input type="text" class="tag-inner-input" id="roles-input" placeholder="Add role…" />
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Locations</div>
+        <div class="tag-input-wrap" id="locations-wrap">
+          <input type="text" class="tag-inner-input" id="locations-input" placeholder="Add city or region…" />
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Company Watchlist</div>
+        <div class="tag-input-wrap" id="companies-wrap">
+          <input type="text" class="tag-inner-input" id="companies-input" placeholder="Add company…" />
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Alert Mode</div>
+        <div class="segmented" id="alert-segmented">
+          <button class="seg-btn active" data-val="instant">⚡ Instant</button>
+          <button class="seg-btn" data-val="daily">📬 Daily</button>
+          <button class="seg-btn" data-val="weekly">📅 Weekly</button>
+        </div>
       </div>
     </div>
-    <div id="wl-list"></div>
-  </div>
 
-  <!-- VIEW: ARCHITECT -->
-  <div id="view-architect" class="view">
-    <div class="section-hdr"><span>🧠 MASTER RESUME PROFILE</span></div>
-    <div class="form-group">
-      <label>Skills (comma-separated)</label>
-      <input type="text" id="prof-skills" placeholder="e.g. React, TypeScript, Node.js" />
+    <!-- ── TAB 2: WATCHED PAGES ── -->
+    <div class="tab-panel" id="tab-watched">
+      <div id="current-page-banner" style="display:none;"></div>
+      <div id="watched-list-container">
+        <div class="loading-spinner"><div class="spinner"></div> Loading…</div>
+      </div>
     </div>
-    <div class="form-group">
-      <label>Work Experience</label>
-      <textarea id="prof-experience" placeholder="e.g. SWE at Acme Corp (2023-Present): Led team of 4..."></textarea>
-    </div>
-    <div class="form-group">
-      <label>Education</label>
-      <textarea id="prof-education" placeholder="e.g. B.Tech CS — IIT Delhi (2020-2024)"></textarea>
-    </div>
-    <div class="form-group">
-      <label>Personal Projects</label>
-      <textarea id="prof-projects" placeholder="e.g. NextRole: Built micro-scraper..."></textarea>
-    </div>
-    <button class="save-btn" id="save-profile-btn">SAVE MASTER RESUME</button>
-  </div>
 
-  <!-- STATUS BAR (always visible) -->
-  <div class="status-bar">
-    <span class="left">[SECURE SYSTEM] // CHANNELS ONLINE</span>
-    <div class="right">
-      <span id="latency-display">LATENCY: 24MS</span>
-      <span class="enc">🔒 ENCRYPTED</span>
+    <!-- ── TAB 3: FEED ── -->
+    <div class="tab-panel" id="tab-feed">
+      <div class="feed-header">
+        <div class="segmented" style="flex: 1; margin-right: 12px;" id="feed-filter">
+          <button class="seg-btn active" data-val="all">All</button>
+          <button class="seg-btn" data-val="today">Today</button>
+          <button class="seg-btn" data-val="7days">7 days</button>
+        </div>
+        <button class="mark-all-btn" id="mark-all-btn" style="display:none;">Mark read</button>
+      </div>
+      <div id="feed-list-container">
+        <div class="loading-spinner"><div class="spinner"></div> Loading…</div>
+      </div>
     </div>
   </div>
 
-  <script type="module" src="./popup.ts"></script>
+  <!-- Footer -->
+  <div class="popup-footer">
+    <div class="latency-badge">
+      <div class="latency-dot" id="latency-dot"></div>
+      <span id="latency-text">Checking…</span>
+    </div>
+    <span class="manage-link" id="manage-profile-link">Manage profile →</span>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="popup.ts" type="module"></script>
 </body>
 </html>

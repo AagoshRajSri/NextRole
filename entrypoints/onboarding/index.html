@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NextRole — Setup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #F4F4F0;
+      --surface: #FFFFFF;
+      --card: #FFFFFF;
+      --border: #000000;
+      --cyan: #4A90E2;
+      --cyan-dim: #2C6EBA;
+      --green: #2ecc71;
+      --amber: #f1c40f;
+      --red: #e74c3c;
+      --pink: #ff6b81;
+      --purple: #9b59b6;
+      --text: #000000;
+      --muted: #444444;
+      --mono: 'IBM Plex Mono', monospace;
+      --display: 'Syne', sans-serif;
+      --shadow: 4px 4px 0px #000000;
+      --shadow-hover: 6px 6px 0px #000000;
+      --shadow-active: 2px 2px 0px #000000;
+      --border-width: 3px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-weight: 500;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      -webkit-font-smoothing: antialiased;
+      background-image: radial-gradient(#000 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    .onboarding-root {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* ── Logo ── */
+    .logo-bar {
+      text-align: center;
+      font-family: var(--display);
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-shadow: 2px 2px 0px var(--cyan);
+    }
+    .logo-bar span { background: var(--cyan); padding: 0 4px; border: 2px solid #000; }
+
+    /* ── Step dots ── */
+    .step-indicator {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+    .step-dot {
+      width: 14px; height: 14px;
+      border-radius: 0%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+    .step-dot.active { background: var(--pink); transform: scale(1.2); box-shadow: 2px 2px 0 #000; }
+    .step-dot.done { background: var(--green); }
+    .step-line {
+      width: 32px; height: 3px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+    .step-line.done { background: var(--border); }
+
+    /* ── Card ── */
+    .step-card {
+      background: var(--surface);
+      border: var(--border-width) solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 32px;
+      position: relative;
+    }
+
+    .step-title {
+      font-family: var(--display);
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+    .step-subtitle {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 24px;
+      line-height: 1.5;
+      font-weight: 700;
+    }
+
+    /* ── Form elements ── */
+    .form-group { margin-bottom: 20px; }
+    .form-group label {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      background: var(--amber);
+      padding: 2px 6px;
+      border: 2px solid #000;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .form-input {
+      width: 100%;
+      background: var(--card);
+      border: var(--border-width) solid var(--border);
+      padding: 12px 14px;
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+      outline: none;
+      transition: all 0.2s;
+    }
+    .form-input:focus { 
+      box-shadow: var(--shadow);
+      transform: translate(-2px, -2px);
+    }
+    .form-input::placeholder { color: #888; font-style: italic; }
+
+    /* ── Tag input ── */
+    .tag-input-wrap {
+      background: var(--card);
+      border: var(--border-width) solid var(--border);
+      padding: 8px 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-height: 48px;
+      transition: all 0.2s;
+      cursor: text;
+    }
+    .tag-input-wrap:focus-within { 
+      box-shadow: var(--shadow);
+      transform: translate(-2px, -2px);
+    }
+    .tag-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--purple);
+      border: 2px solid var(--border);
+      box-shadow: 2px 2px 0 #000;
+      color: #fff;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
+    .tag-pill .tag-x {
+      cursor: pointer;
+      color: #000;
+      background: #fff;
+      border: 1px solid #000;
+      padding: 0 4px;
+      font-size: 13px;
+      font-weight: 700;
+      transition: background 0.15s;
+    }
+    .tag-pill .tag-x:hover { background: var(--red); color: #fff; }
+    .tag-inner-input {
+      border: none;
+      background: transparent;
+      outline: none;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      min-width: 100px;
+      flex: 1;
+    }
+    .tag-inner-input::placeholder { color: #888; font-style: italic; }
+
+    /* ── Suggestions ── */
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .suggestion-chip {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .suggestion-chip:hover { 
+      background: var(--cyan); 
+      color: #fff; 
+      transform: translate(-2px, -2px);
+      box-shadow: 2px 2px 0 #000;
+    }
+    .suggestion-chip.selected { display: none; }
+
+    /* ── Radio pills ── */
+    .radio-pills {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .radio-pill {
+      flex: 1;
+      min-width: 90px;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      padding: 10px 12px;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .radio-pill:hover { 
+      transform: translate(-2px, -2px);
+      box-shadow: 2px 2px 0 #000;
+    }
+    .radio-pill.active {
+      background: var(--green);
+      box-shadow: 2px 2px 0 #000;
+      transform: translate(-2px, -2px);
+    }
+
+    /* ── Radio cards (large) ── */
+    .radio-card {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      padding: 16px 18px;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 12px;
+    }
+    .radio-card:hover { 
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 #000;
+    }
+    .radio-card.active { 
+      background: var(--pink);
+      color: #fff;
+      box-shadow: 4px 4px 0 #000;
+      transform: translate(-2px, -2px);
+    }
+    .radio-card .rc-title {
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+    .radio-card .rc-desc {
+      font-size: 12px;
+      font-weight: 700;
+      color: inherit;
+      line-height: 1.4;
+    }
+    .radio-card.active .rc-desc { color: #fff; }
+
+    /* ── Toggle ── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      margin-top: 16px;
+    }
+    .toggle-label { font-size: 13px; font-weight: 700; color: var(--text); }
+    .toggle-label small { display: block; font-size: 11px; margin-top: 2px; }
+    .toggle-switch {
+      width: 48px; height: 26px;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle-switch.on { background: var(--green); }
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 18px; height: 18px;
+      background: #000;
+      transition: transform 0.2s;
+    }
+    .toggle-switch.on::after { transform: translateX(22px); }
+
+    /* ── Buttons ── */
+    .btn-row {
+      display: flex;
+      gap: 16px;
+      margin-top: 28px;
+    }
+    .btn {
+      flex: 1;
+      padding: 14px 20px;
+      font-family: var(--display);
+      font-size: 16px;
+      font-weight: 800;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: var(--border-width) solid var(--border);
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
+    .btn:active {
+      transform: translate(2px, 2px);
+      box-shadow: var(--shadow-active);
+    }
+    .btn-ghost {
+      background: #fff;
+      color: var(--text);
+    }
+    .btn-ghost:hover { background: #f0f0f0; }
+    .btn-primary {
+      background: var(--cyan);
+      color: #000;
+    }
+    .btn-primary:hover { background: var(--amber); }
+    .btn-primary:disabled { background: #ccc; cursor: not-allowed; box-shadow: none; transform: none; }
+    .btn-big {
+      width: 100%;
+      padding: 18px;
+      font-size: 18px;
+      letter-spacing: 1px;
+    }
+
+    /* ── Summary card ── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 24px 0;
+    }
+    .summary-item {
+      background: var(--surface);
+      border: 2px solid var(--border);
+      box-shadow: 2px 2px 0 #000;
+      padding: 16px;
+      text-align: center;
+    }
+    .summary-item .si-number {
+      font-family: var(--display);
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--text);
+      background: var(--green);
+      display: inline-block;
+      padding: 0 8px;
+      border: 2px solid #000;
+      margin-bottom: 8px;
+    }
+    .summary-item .si-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .skip-link {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      background: #fff;
+      border: 2px solid #000;
+      padding: 4px 8px;
+      cursor: pointer;
+      margin-top: 12px;
+      transition: all 0.15s;
+    }
+    .skip-link:hover { 
+      background: var(--amber); 
+      transform: translate(-2px, -2px);
+      box-shadow: 2px 2px 0 #000;
+    }
+
+    /* ── Step visibility ── */
+    .step-panel { display: none; }
+    .step-panel.visible { display: block; animation: popIn 0.2s ease-out; }
+    @keyframes popIn { 
+      from { opacity: 0; transform: scale(0.95); } 
+      to { opacity: 1; transform: scale(1); } 
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 560px) {
+      .step-card { padding: 24px 20px; }
+      .summary-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ── Dashboard & Edit Views ── */
+    .dashboard, .edit-form {
+      background: var(--surface);
+      border: var(--border-width) solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 32px;
+      position: relative;
+      width: 100%;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+
+    .db-header, .edit-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      padding-bottom: 24px;
+      border-bottom: 3px solid var(--border);
+    }
+    .db-avatar {
+      width: 48px; height: 48px;
+      background: var(--cyan);
+      border: 3px solid #000;
+      box-shadow: 2px 2px 0 #000;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--display); font-size: 20px; font-weight: 800;
+      flex-shrink: 0;
+    }
+    .db-identity { flex: 1; padding: 0 16px; }
+    .db-name { font-family: var(--display); font-size: 20px; font-weight: 800; text-transform: uppercase; }
+    .db-sub { font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 4px; }
+    .db-linkedin { display: inline-block; font-size: 11px; font-weight: 700; color: var(--text); background: var(--amber); border: 2px solid #000; padding: 2px 6px; margin-top: 6px; text-decoration: none; box-shadow: 2px 2px 0 #000; }
+    
+    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px; }
+    .stat-card {
+      background: var(--card);
+      border: 2px solid var(--border);
+      box-shadow: 2px 2px 0 #000;
+      padding: 12px; text-align: center;
+    }
+    .stat-num { font-family: var(--display); font-size: 24px; font-weight: 800; background: var(--pink); border: 2px solid #000; display: inline-block; padding: 2px 8px; margin-bottom: 6px; color: #fff; }
+    .stat-lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; }
+
+    .section-card {
+      background: var(--card);
+      border: 2px solid var(--border);
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 4px 4px 0 #000;
+    }
+    .section-title {
+      font-family: var(--display);
+      font-size: 18px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      display: inline-block;
+      background: var(--green);
+      padding: 4px 8px;
+      border: 2px solid #000;
+    }
+    
+    .pref-group { margin-bottom: 16px; }
+    .pref-label { font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; color: var(--muted); }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .pill { font-size: 11px; font-weight: 700; padding: 4px 8px; border: 2px solid #000; box-shadow: 2px 2px 0 #000; color: #fff; }
+    .pill.cyan { background: var(--cyan-dim); }
+    .pill.green { background: #27ae60; }
+    .pill.amber { background: #d35400; }
+    
+    .pref-row-inline { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 8px; border: 2px solid #000; background: #fff; }
+    .badge-inline { font-weight: 800; background: var(--purple); color: #fff; padding: 2px 8px; border: 2px solid #000; text-transform: uppercase; font-size: 11px; }
+
+    .page-row, .job-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px; border: 2px solid var(--border);
+      background: var(--surface); margin-bottom: 12px;
+      transition: all 0.2s;
+    }
+    .page-row:hover, .job-row:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 #000; }
+    .page-avatar { width: 32px; height: 32px; background: var(--amber); border: 2px solid #000; display: flex; align-items: center; justify-content: center; font-weight: 800; }
+    .page-info { flex: 1; }
+    .page-label, .job-title { font-weight: 800; font-size: 14px; margin-bottom: 4px; }
+    .page-sub, .job-meta { font-size: 11px; font-weight: 700; color: var(--muted); }
+    .btn-rm { background: #fff; border: 2px solid #000; padding: 4px; cursor: pointer; transition: all 0.2s; }
+    .btn-rm:hover { background: var(--red); color: #fff; }
+
+    .db-footer { display: flex; gap: 16px; margin-top: 24px; }
+    .btn-edit, .btn-primary, .btn-ghost { font-family: var(--display); font-weight: 800; text-transform: uppercase; border: 2px solid #000; padding: 12px 16px; cursor: pointer; transition: all 0.2s; }
+    .btn-edit { background: var(--amber); box-shadow: 2px 2px 0 #000; }
+    .btn-edit:hover { background: var(--cyan); transform: translate(-2px, -2px); box-shadow: 4px 4px 0 #000; }
+    
+    .loading-full { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 48px; background: var(--surface); border: 3px solid #000; box-shadow: 4px 4px 0 #000; }
+    .spinner-lg { width: 32px; height: 32px; border: 4px solid #000; border-top-color: var(--cyan); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    
+    /* Edit mode */
+    .field-group { margin-bottom: 20px; }
+    .text-input, .tag-input { width: 100%; border: 2px solid #000; padding: 12px; font-family: var(--mono); font-weight: 700; background: var(--surface); transition: all 0.2s; }
+    .text-input:focus, .tag-input:focus { box-shadow: 4px 4px 0 #000; transform: translate(-2px, -2px); outline: none; }
+    .tag-wrap { border: 2px solid #000; padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; background: #fff; }
+    .tag-wrap .tag-input { border: none; padding: 4px; box-shadow: none; transform: none; min-width: 150px; }
+    .alert-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .alert-card { border: 2px solid #000; padding: 16px; text-align: center; cursor: pointer; font-weight: 800; background: #fff; transition: all 0.2s; }
+    .alert-card:hover { transform: translate(-2px, -2px); box-shadow: 2px 2px 0 #000; }
+    .alert-card.active { background: var(--pink); color: #fff; transform: translate(-2px, -2px); box-shadow: 2px 2px 0 #000; }
+  </style>
+</head>
+<body>
+  <div id="wizard-root" class="onboarding-root" style="display: none;">
+    <div class="logo-bar">NEXT<span>ROLE</span></div>
+
+    <div class="step-indicator" id="step-indicator"></div>
+
+    <div class="step-card" id="step-card">
+      <!-- Step 1: Identity -->
+      <div class="step-panel visible" data-step="1">
+        <div class="step-title">Who are you?</div>
+        <div class="step-subtitle">Let's set up your identity. This helps us personalize your alerts.</div>
+        <div class="form-group">
+          <label>FULL NAME</label>
+          <input type="text" class="form-input" id="ob-name" placeholder="e.g. Aagosh Raj Sri" />
+        </div>
+        <div class="form-group">
+          <label>PHONE NUMBER</label>
+          <input type="tel" class="form-input" id="ob-phone" placeholder="e.g. +91 98765 43210" />
+        </div>
+        <div class="form-group">
+          <label>EMAIL</label>
+          <input type="email" class="form-input" id="ob-email" placeholder="e.g. you@gmail.com" />
+        </div>
+        <div class="form-group">
+          <label>LINKEDIN URL <span style="font-weight: 500;">(optional)</span></label>
+          <input type="url" class="form-input" id="ob-linkedin" placeholder="e.g. linkedin.com/in/yourname" />
+        </div>
+      </div>
+
+      <!-- Step 2: Target Roles -->
+      <div class="step-panel" data-step="2">
+        <div class="step-title">What roles excite you?</div>
+        <div class="step-subtitle">Add job titles or keywords you're looking for. We'll match these against every posting.</div>
+        <div class="form-group">
+          <label>ROLE KEYWORDS</label>
+          <div class="tag-input-wrap" id="roles-wrap">
+            <input type="text" class="tag-inner-input" id="roles-input" placeholder="Type and press Enter…" />
+          </div>
+          <div class="suggestions" id="roles-suggestions">
+            <span class="suggestion-chip" data-val="Software Engineer">Software Engineer</span>
+            <span class="suggestion-chip" data-val="Security Engineer">Security Engineer</span>
+            <span class="suggestion-chip" data-val="Product Manager">Product Manager</span>
+            <span class="suggestion-chip" data-val="Data Scientist">Data Scientist</span>
+            <span class="suggestion-chip" data-val="DevOps Engineer">DevOps Engineer</span>
+            <span class="suggestion-chip" data-val="Frontend Developer">Frontend Developer</span>
+            <span class="suggestion-chip" data-val="Backend Developer">Backend Developer</span>
+            <span class="suggestion-chip" data-val="Intern">Intern</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>EXPERIENCE LEVEL</label>
+          <div class="radio-pills" id="exp-pills">
+            <div class="radio-pill" data-val="fresher">Fresher</div>
+            <div class="radio-pill" data-val="1-3 yrs">1–3 yrs</div>
+            <div class="radio-pill" data-val="3-7 yrs">3–7 yrs</div>
+            <div class="radio-pill" data-val="7+">7+ yrs</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Locations -->
+      <div class="step-panel" data-step="3">
+        <div class="step-title">Where do you want to work?</div>
+        <div class="step-subtitle">Add cities, regions, or "Remote". We'll filter jobs by location.</div>
+        <div class="form-group">
+          <label>LOCATIONS</label>
+          <div class="tag-input-wrap" id="locations-wrap">
+            <input type="text" class="tag-inner-input" id="locations-input" placeholder="Type and press Enter…" />
+          </div>
+          <div class="suggestions" id="locations-suggestions">
+            <span class="suggestion-chip" data-val="Remote">Remote</span>
+            <span class="suggestion-chip" data-val="Bengaluru">Bengaluru</span>
+            <span class="suggestion-chip" data-val="Hyderabad">Hyderabad</span>
+            <span class="suggestion-chip" data-val="Delhi NCR">Delhi NCR</span>
+            <span class="suggestion-chip" data-val="Mumbai">Mumbai</span>
+            <span class="suggestion-chip" data-val="United States">United States</span>
+            <span class="suggestion-chip" data-val="United Kingdom">United Kingdom</span>
+            <span class="suggestion-chip" data-val="Anywhere">Anywhere</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Dream Companies -->
+      <div class="step-panel" data-step="4">
+        <div class="step-title">Dream companies</div>
+        <div class="step-subtitle">We'll alert you about any matching role at these companies — even if you haven't added their careers page.</div>
+        <div class="form-group">
+          <label>COMPANIES</label>
+          <div class="tag-input-wrap" id="companies-wrap">
+            <input type="text" class="tag-inner-input" id="companies-input" placeholder="e.g. Google, CrowdStrike, Stripe…" />
+          </div>
+        </div>
+        <div class="skip-link" id="skip-companies">SKIP FOR NOW →</div>
+      </div>
+
+      <!-- Step 5: Alert Preferences -->
+      <div class="step-panel" data-step="5">
+        <div class="step-title">Alert preferences</div>
+        <div class="step-subtitle">Choose how and when you'd like to be notified about new matches.</div>
+        <div class="form-group">
+          <label>NOTIFICATION FREQUENCY</label>
+          <div class="radio-card active" data-alert="instant">
+            <div class="rc-title">⚡ Instant</div>
+            <div class="rc-desc">Get notified the moment a matching job is detected.</div>
+          </div>
+          <div class="radio-card" data-alert="daily">
+            <div class="rc-title">📬 Daily digest</div>
+            <div class="rc-desc">One summary notification every morning at 9 AM.</div>
+          </div>
+          <div class="radio-card" data-alert="weekly">
+            <div class="rc-title">📅 Weekly</div>
+            <div class="rc-desc">Monday morning summary — less noise, same coverage.</div>
+          </div>
+        </div>
+        <div class="toggle-row" id="email-toggle-row" style="display: none;">
+          <div class="toggle-label">
+            EMAIL ALERTS
+            <small>Also receive matches by email</small>
+          </div>
+          <div class="toggle-switch" id="toggle-email"></div>
+        </div>
+      </div>
+
+      <!-- Step 6: Ready -->
+      <div class="step-panel" data-step="6">
+        <div class="step-title">You're all set 🚀</div>
+        <div class="step-subtitle">Here's a summary of your monitoring setup.</div>
+        <div class="summary-grid" id="summary-grid"></div>
+        <button class="btn btn-primary btn-big" id="btn-launch">START MONITORING</button>
+      </div>
+
+      <div class="btn-row" id="nav-buttons">
+        <button class="btn btn-ghost" id="btn-back" style="display: none;">BACK</button>
+        <button class="btn btn-primary" id="btn-next">CONTINUE</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./onboarding.ts" type="module"></script>
+</body>
+</html>

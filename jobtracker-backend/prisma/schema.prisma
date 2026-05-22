@@ -11,44 +11,65 @@ generator client {
 }
 
 model TrackedSearch {
-  id           String        @id @default(uuid())
-  userId       String
-  url          String
-  platform     String
-  createdAt    DateTime      @default(now())
-  snapshots    JobSnapshot[]
+  id               String        @id @default(uuid())
+  userId           String
+  url              String
+  platform         String
+  createdAt        DateTime      @default(now())
+  lastScrapedAt    DateTime?
+  lastScrapeStatus String?       // "ok" | "error" | "empty"
+  lastScrapeError  String?
+  newJobCount      Int           @default(0)
+  snapshots        JobSnapshot[]
 
   @@index([userId])
+  @@unique([userId, url])
 }
 
 model JobSnapshot {
   id              String           @id @default(uuid())
   trackedSearchId String
   trackedSearch   TrackedSearch    @relation(fields: [trackedSearchId], references: [id], onDelete: Cascade)
-  atsJobId        String           // Job ID provided by the ATS platform (Greenhouse opening ID, Lever post ID, etc.)
+  atsJobId        String
   title           String
   location        String
-  url             String           // Direct URL to apply
+  url             String
+  companyName     String?
+  matchReason     String?
   firstSeenAt     DateTime         @default(now())
-  isNew           Boolean          @default(true) // Helper to track if the extension has polled it yet
+  isNew           Boolean          @default(true)
+  seenAt          DateTime?
   jobEmbedding    Unsupported("vector(1024)")?
   semanticScore   Float?
   tailoredResumes TailoredResume[]
 
-  @@unique([trackedSearchId, atsJobId]) // Ensure we don't save duplicate snapshots for the same tracked search
+  @@unique([trackedSearchId, atsJobId])
 }
 
 model UserProfile {
-  id              String   @id @default(uuid())
-  userId          String   @unique
-  experience      String   @db.Text
-  skills          String   @db.Text
-  education       String   @db.Text
-  projects        String   @db.Text
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  name             String?
+  phone            String?
+  email            String?
+  linkedinUrl      String?
+  targetRoles      String[] @default([])
+  locations        String[] @default([])
+  watchlistCompanies String[] @default([])
+  experienceLevel  String?
+  alertMode        String   @default("instant")
+  emailAlerts      Boolean  @default(false)
+  isOnboarded      Boolean  @default(false)
+  monitorActive    Boolean  @default(false)
+  // Legacy resume fields — kept for premium AI tailoring later
+  experience       String   @default("") @db.Text
+  skills           String   @default("") @db.Text
+  education        String   @default("") @db.Text
+  projects         String   @default("") @db.Text
   profileEmbedding Unsupported("vector(1024)")?
-  isPremium       Boolean  @default(false)
-  monthlyRunsUsed Int      @default(0)
-  updatedAt       DateTime @updatedAt
+  isPremium        Boolean  @default(false)
+  monthlyRunsUsed  Int      @default(0)
+  updatedAt        DateTime @updatedAt
 }
 
 model TailoredResume {

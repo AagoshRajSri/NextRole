@@ -1,11 +1,11 @@
 import { defineConfig } from 'wxt';
 
-// See https://wxt.dev/api/config.html
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'NextRole',
-    description: 'NextRole - AI-powered Cybersecurity Careers Co-pilot',
-    permissions: ['storage', 'notifications', 'alarms', 'tabs'],
-  }
+    description: 'NextRole — AI-powered job monitoring co-pilot. Never miss out.',
+    permissions: ['storage', 'notifications', 'alarms', 'tabs', 'activeTab'],
+    host_permissions: ['http://localhost:5000/*'],
+  },
 });

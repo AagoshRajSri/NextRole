@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider        = "prisma-client-js"
   output          = "../generated/prisma"
@@ -15,40 +12,60 @@ datasource db {
 }
 
 model TrackedSearch {
-  id           String        @id @default(uuid())
-  userId       String
-  url          String
-  platform     String
-  createdAt    DateTime      @default(now())
-  snapshots    JobSnapshot[]
+  id               String        @id @default(uuid())
+  userId           String
+  url              String
+  platform         String
+  createdAt        DateTime      @default(now())
+  lastScrapedAt    DateTime?
+  lastScrapeStatus String?       // "ok" | "error" | "empty"
+  lastScrapeError  String?
+  newJobCount      Int           @default(0)
+  snapshots        JobSnapshot[]
 
   @@index([userId])
+  @@unique([userId, url])
 }
 
 model JobSnapshot {
   id              String           @id @default(uuid())
   trackedSearchId String
   trackedSearch   TrackedSearch    @relation(fields: [trackedSearchId], references: [id], onDelete: Cascade)
-  atsJobId        String           // Job ID provided by the ATS platform (Greenhouse opening ID, Lever post ID, etc.)
+  atsJobId        String           // Job ID provided by the ATS platform
   title           String
   location        String
   url             String           // Direct URL to apply
+  companyName     String?
+  matchReason     String?
   firstSeenAt     DateTime         @default(now())
   isNew           Boolean          @default(true) // Helper to track if the extension has polled it yet
+  seenAt          DateTime?
   jobEmbedding    Unsupported("vector(1024)")?
   semanticScore   Float?
   tailoredResumes TailoredResume[]
 
-  @@unique([trackedSearchId, atsJobId]) // Ensure we don't save duplicate snapshots for the same tracked search
+  @@unique([trackedSearchId, atsJobId]) // Ensure we don't save duplicate snapshots
 }
 
 model UserProfile {
   id               String   @id @default(uuid())
   userId           String   @unique
-  experience       String   @db.Text
-  skills           String   @db.Text
-  education        String   @db.Text
-  projects         String   @db.Text
+  name             String?
+  phone            String?
+  email            String?
+  linkedinUrl      String?
+  targetRoles      String[] @default([])
+  locations        String[] @default([])
+  watchlistCompanies String[] @default([])
+  experienceLevel  String?
+  alertMode        String   @default("instant")
+  emailAlerts      Boolean  @default(false)
+  isOnboarded      Boolean  @default(false)
+  monitorActive    Boolean  @default(false)
+  experience       String   @default("") @db.Text
+  skills           String   @default("") @db.Text
+  education        String   @default("") @db.Text
+  projects         String   @default("") @db.Text
   profileEmbedding Unsupported("vector(1024)")?
   isPremium        Boolean  @default(false)
   monthlyRunsUsed  Int      @default(0)

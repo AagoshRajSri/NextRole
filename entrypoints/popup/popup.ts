@@ -1,586 +1,475 @@
-// ─────────────────────────────────────────────────────────
-//  NextRole Popup — System Console v3
-// ─────────────────────────────────────────────────────────
+import { browser } from 'wxt/browser';
+import {
+  profileStorage,
+  trackedPagesStorage,
+  unseenJobsStorage,
+  monitorStateStorage,
+  UserProfile,
+  TrackedPage,
+  StoredJob,
+  MonitorState,
+  timeAgo,
+  isCareerPage,
+  extractReadableLabel,
+  normalizeCareerUrl
+} from '../../lib/storage';
 
-interface SavedSearch { id: string; companyName: string; url: string; createdAt: number; }
-interface WatchlistEntry { id: string; company: string; role: string; createdAt: number; }
+// ────────────────────────────────────────────────────────
+// STATE
+// ────────────────────────────────────────────────────────
+let profile: UserProfile | null = null;
+let trackedPages: TrackedPage[] = [];
+let unseenJobs: StoredJob[] = [];
+let monitorState: MonitorState | null = null;
+let currentFeedFilter = 'all'; // all, today, 7days, applied
 
-interface MonitorConfig {
-  active: boolean;
-  mode: 'keywords' | 'all';
-  roles: string[];
-  stack: string[];
-  location: string;
-  autoApply: boolean;
-  instantAlerts: boolean;
-}
+// ────────────────────────────────────────────────────────
+// DOM REFS
+// ────────────────────────────────────────────────────────
+const $ = (id: string) => document.getElementById(id)!;
+const headerStatusPill = $('header-status-pill');
+const headerStatusText = $('header-status-text');
+const monitorToggle = $('monitor-toggle');
+const monitorBadge = $('monitor-badge');
+const monitorMeta = $('monitor-meta');
+const feedBadge = $('feed-badge');
+const toast = $('toast');
+const latencyText = $('latency-text');
+const latencyDot = $('latency-dot');
 
-const DEFAULT_CONFIG: MonitorConfig = {
-  active: false,
-  mode: 'keywords',
-  roles: ['Software Engineer', 'Intern'],
-  stack: ['Node.js', 'Java', 'TypeScript'],
-  location: 'anywhere-india',
-  autoApply: false,
-  instantAlerts: true,
-};
+// ────────────────────────────────────────────────────────
+// INIT
+// ────────────────────────────────────────────────────────
+async function init() {
+  $('dynamic-root')?.remove(); // if any existing
+  document.body.insertAdjacentHTML('afterbegin', '<div id="global-loading" style="display:flex;justify-content:center;align-items:center;height:100vh;color:#00E5FF;"><div class="spinner"></div></div>');
 
-// ── State ──────────────────────────────────────────────
-let config: MonitorConfig = { ...DEFAULT_CONFIG };
+  // Load all initial
+  [profile, trackedPages, unseenJobs, monitorState] = await Promise.all([
+    profileStorage.getValue(),
+    trackedPagesStorage.getValue(),
+    unseenJobsStorage.getValue(),
+    monitorStateStorage.getValue(),
+  ]);
 
-// ── Boot ───────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', async () => {
-  await ensureUserId();
-  
-  const isOnboarded = await checkOnboarding();
-  if (!isOnboarded) {
-    return; // Wait for user to complete onboarding
+  if (!profile?.isOnboarded) {
+    browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') });
+    window.close();
+    return;
   }
+
+  $('global-loading')?.remove();
+
+  // Watch for changes
+  profileStorage.watch(val => { if(val) { profile = val; renderMonitorState(); }});
+  trackedPagesStorage.watch(val => { if(val) { trackedPages = val; renderMonitorState(); loadWatchedPages(); }});
+  unseenJobsStorage.watch(val => { if(val) { unseenJobs = val; updateFeedBadge(); loadFeed(); }});
+  monitorStateStorage.watch(val => { if(val) { monitorState = val; renderMonitorState(); }});
+
+  // Setup UI
+  setupTabs();
+  setupTagInputs();
+  setupSegmentedControls();
+  setupMonitorToggle();
+  setupFooter();
   
-  await bootApp();
-});
-
-// ── Smart Onboarding ───────────────────────────────────
-// Checks masterProfile AND monitorConfig. If monitorConfig already
-// has roles/stack data (user already configured the monitoring tab),
-// we auto-create masterProfile from it and skip onboarding entirely.
-async function checkOnboarding(): Promise<boolean> {
-  const data = await browser.storage.local.get(['masterProfile', 'monitorConfig']) as any;
+  // Initial renders
+  renderMonitorState();
+  updateFeedBadge();
+  loadWatchedPages();
+  loadFeed();
+  checkCurrentTab();
   
-  // Already onboarded
-  if (data?.masterProfile?.isOnboarded) {
-    return true;
-  }
-  
-  // Auto-populate from existing monitorConfig if it has real data
-  const mc = data?.monitorConfig;
-  if (mc && (mc.roles?.length > 0 || mc.stack?.length > 0)) {
-    const masterProfile = {
-      isOnboarded: true,
-      roles: mc.roles || [],
-      stack: mc.stack || [],
-      experience: 'Intern / Entry-Level',
-      locations: mc.location ? [mc.location] : ['bangalore']
-    };
-    await browser.storage.local.set({ masterProfile });
-    console.log('[NextRole] Auto-populated masterProfile from existing monitorConfig. Skipping onboarding.');
-    return true;
-  }
-  
-  // Show onboarding overlay
-  document.getElementById('onboarding-overlay')?.classList.add('active');
-  
-  // Wire save button
-  const btn = document.getElementById('ob-save-btn');
-  btn?.addEventListener('click', async () => {
-    const rolesStr = (document.getElementById('ob-roles') as HTMLInputElement).value || '';
-    const stackStr = (document.getElementById('ob-stack') as HTMLInputElement).value || '';
-    const exp = (document.getElementById('ob-experience') as HTMLSelectElement).value || 'Intern / Entry-Level';
-    
-    // get checked locations
-    const cbs = document.querySelectorAll('.ob-cb input:checked');
-    const locs: string[] = [];
-    cbs.forEach(cb => locs.push((cb as HTMLInputElement).value));
-    
-    const roles = rolesStr ? rolesStr.split(',').map(s => s.trim()).filter(Boolean) : [];
-    const stack = stackStr ? stackStr.split(',').map(s => s.trim()).filter(Boolean) : [];
-    
-    const masterProfile = {
-      isOnboarded: true,
-      roles,
-      stack,
-      experience: exp,
-      locations: locs.length > 0 ? locs : []
-    };
-    
-    await browser.storage.local.set({ masterProfile });
-    
-    // Also seed monitorConfig with the same data so monitoring tab is pre-filled
-    const seedConfig: MonitorConfig = {
-      ...DEFAULT_CONFIG,
-      roles,
-      stack,
-      location: locs[0] || 'anywhere-india',
-    };
-    await browser.storage.local.set({ monitorConfig: seedConfig });
-    config = seedConfig;
-    
-    // hide overlay
-    document.getElementById('onboarding-overlay')?.classList.remove('active');
-    
-    // emit signal
-    browser.runtime.sendMessage({ action: 'MASTER_PROFILE_MUTATED', profile: masterProfile });
-    
-    // boot the rest of the app
-    await bootApp();
-  });
-  
-  return false;
+  pingBackend();
+
+  // Refresh "time ago" every 30s
+  setInterval(() => {
+    renderMonitorState();
+    loadWatchedPages();
+    loadFeed();
+  }, 30000);
 }
 
-async function bootApp() {
-  await loadConfig();
-
-  renderUI();
-  wireNavTabs();
-  wireSegControl();
-  wireTagInputs();
-  wireToggles();
-  wireLaunchBtn();
-  wireProfileForm();
-  wireWatchlist();
-
-  // Kick off career feed render
-  await renderChannelList();
-  await renderWatchlist();
-
-  // Live latency measurement
-  measureLatency();
-}
-
-// ── User ID ────────────────────────────────────────────
-async function ensureUserId() {
-  const data = await browser.storage.local.get('userId') as any;
-  if (!data?.userId) {
-    await browser.storage.local.set({ userId: `usr-${Math.random().toString(36).slice(2, 11)}` });
-  }
-}
-
-async function getUserId(): Promise<string> {
-  const d = await browser.storage.local.get('userId') as any;
-  return d?.userId ?? 'default-user';
-}
-
-// ── Config persistence ─────────────────────────────────
-async function loadConfig() {
-  const d = await browser.storage.local.get('monitorConfig') as any;
-  if (d?.monitorConfig) {
-    config = { ...DEFAULT_CONFIG, ...d.monitorConfig };
-  }
-}
-
-async function saveConfig() {
-  await browser.storage.local.set({ monitorConfig: config });
-  
-  // Bidirectional sync: keep masterProfile in sync with monitoring config
-  await syncMasterProfile();
-}
-
-// Sync monitoring config changes into masterProfile so content script
-// scoring always uses the latest roles/stack/locations
-async function syncMasterProfile() {
-  const d = await browser.storage.local.get('masterProfile') as any;
-  const existing = d?.masterProfile || {};
-  
-  const updated = {
-    ...existing,
-    isOnboarded: true,
-    roles: config.roles,
-    stack: config.stack,
-    locations: existing.locations || [config.location],
-  };
-  
-  await browser.storage.local.set({ masterProfile: updated });
-  
-  // Notify content scripts
-  browser.runtime.sendMessage({ action: 'MASTER_PROFILE_MUTATED', profile: updated }).catch(() => {});
-}
-
-// ── Render all UI from state ────────────────────────────
-function renderUI() {
-  renderTags('roles', config.roles);
-  renderTags('stack', config.stack);
-
-  const locSel = document.getElementById('location-select') as HTMLSelectElement;
-  if (locSel) locSel.value = config.location;
-
-  setToggle('toggle-autoapply', config.autoApply);
-  setToggle('toggle-alerts', config.instantAlerts);
-  updateSlotBadge();
-  updateMonitorStatus();
-}
-
-// ── Tags ───────────────────────────────────────────────
-function renderTags(type: 'roles' | 'stack', items: string[]) {
-  const wrap = document.getElementById(`${type}-tags`);
-  if (!wrap) return;
-  wrap.innerHTML = '';
-  items.forEach(item => {
-    const tag = document.createElement('div');
-    tag.className = 'tag';
-    tag.innerHTML = `${escHtml(item)}<span class="rm" data-tag="${escHtml(item)}" data-type="${type}">×</span>`;
-    tag.querySelector('.rm')?.addEventListener('click', async () => {
-      if (type === 'roles') config.roles = config.roles.filter(r => r !== item);
-      else config.stack = config.stack.filter(s => s !== item);
-      await saveConfig();
-      renderTags(type, type === 'roles' ? config.roles : config.stack);
-      updateSlotBadge();
-    });
-    wrap.appendChild(tag);
-  });
-}
-
-function wireTagInputs() {
-  wireOneTagInput('roles-input', 'roles-add', 'roles');
-  wireOneTagInput('stack-input', 'stack-add', 'stack');
-}
-
-function wireOneTagInput(inputId: string, btnId: string, type: 'roles' | 'stack') {
-  const input = document.getElementById(inputId) as HTMLInputElement;
-  const btn = document.getElementById(btnId);
-  if (!input || !btn) return;
-
-  const add = async () => {
-    const val = input.value.trim();
-    if (!val) return;
-    const arr = type === 'roles' ? config.roles : config.stack;
-    if (!arr.includes(val)) {
-      arr.push(val);
-      await saveConfig();
-      renderTags(type, arr);
-      updateSlotBadge();
-    }
-    input.value = '';
-  };
-
-  btn.addEventListener('click', add);
-  input.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter') add(); });
-}
-
-function updateSlotBadge() {
-  const total = config.roles.length + config.stack.length;
-  const badge = document.getElementById('slot-badge');
-  if (badge) badge.textContent = `${total}/10 SLOTS`;
-}
-
-// ── Toggles ────────────────────────────────────────────
-function setToggle(id: string, on: boolean) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (on) el.classList.add('on');
-  else el.classList.remove('on');
-}
-
-function wireToggles() {
-  document.querySelectorAll<HTMLElement>('.toggle-switch').forEach(el => {
-    el.addEventListener('click', async () => {
-      const key = el.dataset.key as 'autoApply' | 'instantAlerts';
-      (config as any)[key] = !(config as any)[key];
-      setToggle(el.id, (config as any)[key]);
-      await saveConfig();
-
-      // Sync instantAlerts flag to background service worker
-      if (key === 'instantAlerts') {
-        browser.runtime.sendMessage({ action: 'setAlerts', enabled: config.instantAlerts });
-      }
-    });
-  });
-
-  // Location select
-  const locSel = document.getElementById('location-select') as HTMLSelectElement;
-  if (locSel) {
-    locSel.addEventListener('change', async () => {
-      config.location = locSel.value;
-      await saveConfig();
-    });
-  }
-}
-
-// ── Segmented control ──────────────────────────────────
-function wireSegControl() {
-  document.querySelectorAll<HTMLElement>('.seg-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      config.mode = btn.dataset.mode as 'keywords' | 'all';
-      await saveConfig();
-
-      // Show/hide keyword groups based on mode
-      const rolesGroup = document.getElementById('roles-group');
-      const stackGroup = document.getElementById('stack-group');
-      const isKeywords = config.mode === 'keywords';
-      if (rolesGroup) rolesGroup.style.display = isKeywords ? '' : 'none';
-      if (stackGroup) stackGroup.style.display = isKeywords ? '' : 'none';
-    });
-  });
-}
-
-// ── Launch button ──────────────────────────────────────
-function updateMonitorStatus() {
-  const el = document.getElementById('monitor-status');
-  const btn = document.getElementById('launch-btn');
-  if (el) el.classList.toggle('show', config.active);
-  if (btn) {
-    if (config.active) {
-      btn.classList.add('active-state');
-      btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12"/></svg> STOP MONITOR`;
-    } else {
-      btn.classList.remove('active-state');
-      btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l-4 4 4 4M15 13l4-4-4-4M13 4l-2 16"/></svg> LAUNCH MONITOR`;
-    }
-  }
-}
-
-function wireLaunchBtn() {
-  const btn = document.getElementById('launch-btn');
-  if (!btn) return;
-
-  btn.addEventListener('click', async () => {
-    config.active = !config.active;
-    await saveConfig();
-    updateMonitorStatus();
-
-    // Notify the background service worker to start/stop keyword scanning
-    browser.runtime.sendMessage({
-      action: config.active ? 'startMonitor' : 'stopMonitor',
-      config: {
-        mode: config.mode,
-        roles: config.roles,
-        stack: config.stack,
-        location: config.location,
-        instantAlerts: config.instantAlerts,
-      }
-    });
-  });
-}
-
-// ── Navigation tabs ─────────────────────────────────────
-function wireNavTabs() {
-  document.querySelectorAll<HTMLElement>('.tab-btn').forEach(btn => {
+// ────────────────────────────────────────────────────────
+// TABS
+// ────────────────────────────────────────────────────────
+function setupTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      const tab = btn.getAttribute('data-tab')!;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
+      $(`tab-${tab}`).classList.add('active');
 
-      const viewId = `view-${btn.dataset.view}`;
-      document.querySelectorAll<HTMLElement>('.view').forEach(v => v.classList.remove('active'));
-      document.getElementById(viewId)?.classList.add('active');
-
-      if (btn.dataset.view === 'career-feed') {
-        renderChannelList();
-        renderWatchlist();
+      if (tab === 'watched') loadWatchedPages();
+      if (tab === 'feed') {
+        loadFeed();
+        // Clear badge optimistically
+        browser.runtime.sendMessage({ type: 'CLEAR_BADGE' });
       }
-      if (btn.dataset.view === 'architect') loadProfileData();
     });
   });
 }
 
-// ── Career Feed ─────────────────────────────────────────
-async function renderChannelList() {
-  const container = document.getElementById('channel-list');
-  const countEl = document.getElementById('channel-count');
-  if (!container) return;
+// ────────────────────────────────────────────────────────
+// MONITOR STATE
+// ────────────────────────────────────────────────────────
+function renderMonitorState() {
+  if (!profile || !monitorState) return;
+  const active = monitorState.active;
 
-  const d = await browser.storage.local.get('savedSearches') as any;
-  const searches: SavedSearch[] = d?.savedSearches ?? [];
-
-  if (countEl) countEl.textContent = `${searches.length} TRACKED`;
-
-  if (searches.length === 0) {
-    container.innerHTML = `<div class="empty-state">No channels tracked yet.<br/>Visit a job board and click Track.</div>`;
-    return;
+  if (active) {
+    headerStatusPill.className = 'status-pill live';
+    headerStatusText.textContent = 'LIVE';
+    monitorBadge.className = 'live-badge';
+    monitorBadge.textContent = 'LIVE';
+    monitorToggle.classList.add('on');
+  } else {
+    headerStatusPill.className = 'status-pill paused';
+    headerStatusText.textContent = 'PAUSED';
+    monitorBadge.className = 'paused-badge';
+    monitorBadge.textContent = 'PAUSED';
+    monitorToggle.classList.remove('on');
   }
 
-  container.innerHTML = '';
-  const sorted = [...searches].sort((a, b) => b.createdAt - a.createdAt);
+  const ago = monitorState.lastPollAt ? timeAgo(monitorState.lastPollAt) : 'No scan yet';
+  let matchesHtml = '';
+  if (monitorState.lastCycleMatchCount > 0) {
+    matchesHtml = `<br><span style="color:#00FF88;">Last scan: found ${monitorState.lastCycleMatchCount} matches</span>`;
+  } else if (monitorState.lastPollAt) {
+    matchesHtml = `<br><span style="color:#5A7A9A;">Last scan: no new matches</span>`;
+  }
+  monitorMeta.innerHTML = `Monitoring ${trackedPages.length} page${trackedPages.length !== 1 ? 's' : ''} · Last scan: ${ago}${matchesHtml}`;
 
-  sorted.forEach(s => {
-    const card = document.createElement('div');
-    card.className = 'channel-card';
-    const initial = s.companyName?.charAt(0) ?? '?';
-    const shortUrl = cleanUrl(s.url);
-    card.innerHTML = `
-      <div class="channel-av">${initial}</div>
-      <div class="channel-info">
-        <div class="channel-name">${escHtml(s.companyName)}</div>
-        <div class="channel-url" data-url="${escHtml(s.url)}">${escHtml(shortUrl)}</div>
-      </div>
-      <div class="ch-actions">
-        <button class="ch-btn open" title="Open">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        </button>
-        <button class="ch-btn del" title="Remove" data-id="${s.id}" data-url="${escHtml(s.url)}">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </button>
-      </div>
-    `;
+  // Populate tag inputs (only if not currently focused to prevent jumping)
+  if (document.activeElement?.id !== 'roles-input') renderTagsIntoWrap('roles-wrap', 'roles-input', profile.targetRoles);
+  if (document.activeElement?.id !== 'locations-input') renderTagsIntoWrap('locations-wrap', 'locations-input', profile.locations);
+  if (document.activeElement?.id !== 'companies-input') renderTagsIntoWrap('companies-wrap', 'companies-input', profile.watchlistCompanies);
 
-    card.querySelector('.channel-url')?.addEventListener('click', () => browser.tabs.create({ url: s.url }));
-    card.querySelector('.open')?.addEventListener('click', () => browser.tabs.create({ url: s.url }));
-    card.querySelector('.del')?.addEventListener('click', async () => {
-      card.style.opacity = '0';
-      card.style.transform = 'scale(0.95)';
-      card.style.transition = 'all 0.25s ease';
-      setTimeout(async () => {
-        const cur = await browser.storage.local.get('savedSearches') as any;
-        const updated = ((cur?.savedSearches ?? []) as SavedSearch[]).filter(x => x.id !== s.id);
-        await browser.storage.local.set({ savedSearches: updated });
-        await renderChannelList();
-      }, 250);
-    });
-
-    container.appendChild(card);
+  // Set alert mode
+  document.querySelectorAll('#alert-segmented .seg-btn').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-val') === profile!.alertMode);
   });
 }
 
-// ── Company Watchlist ───────────────────────────────────
-function wireWatchlist() {
-  const addBtn = document.getElementById('wl-add-btn');
-  if (!addBtn) return;
+function setupMonitorToggle() {
+  monitorToggle.addEventListener('click', () => {
+    browser.runtime.sendMessage({ type: 'TOGGLE_MONITOR' });
+  });
+}
 
-  addBtn.addEventListener('click', async () => {
-    const companyInput = document.getElementById('wl-company') as HTMLInputElement;
-    const roleInput = document.getElementById('wl-role') as HTMLInputElement;
-    if (!companyInput || !roleInput) return;
+// ────────────────────────────────────────────────────────
+// TAG INPUTS
+// ────────────────────────────────────────────────────────
+function setupTagInputs() {
+  const configs: { wrapId: string; inputId: string; key: keyof UserProfile }[] = [
+    { wrapId: 'roles-wrap', inputId: 'roles-input', key: 'targetRoles' },
+    { wrapId: 'locations-wrap', inputId: 'locations-input', key: 'locations' },
+    { wrapId: 'companies-wrap', inputId: 'companies-input', key: 'watchlistCompanies' },
+  ];
 
-    const company = companyInput.value.trim();
-    const role = roleInput.value.trim();
-    if (!company && !role) return;
+  configs.forEach(({ wrapId, inputId, key }) => {
+    const wrap = $(wrapId);
+    const input = $(inputId) as HTMLInputElement;
 
-    const entry: WatchlistEntry = {
-      id: `wl-${Date.now()}`,
-      company: company || '',
-      role: role || '',
-      createdAt: Date.now()
+    const addTag = (val: string) => {
+      if (!profile) return;
+      const clean = val.trim();
+      const arr = profile[key] as string[];
+      if (clean && !arr.includes(clean)) {
+        const changes = { [key]: [...arr, clean] };
+        browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes });
+      }
+      input.value = '';
     };
 
-    const d = await browser.storage.local.get('companyWatchlist') as any;
-    const list: WatchlistEntry[] = d?.companyWatchlist ?? [];
-    list.push(entry);
-    await browser.storage.local.set({ companyWatchlist: list });
-
-    companyInput.value = '';
-    roleInput.value = '';
-
-    await renderWatchlist();
-  });
-
-  // Enter key support on both inputs
-  const companyInput = document.getElementById('wl-company') as HTMLInputElement;
-  const roleInput = document.getElementById('wl-role') as HTMLInputElement;
-  const triggerAdd = (e: KeyboardEvent) => { if (e.key === 'Enter') addBtn.click(); };
-  companyInput?.addEventListener('keydown', triggerAdd);
-  roleInput?.addEventListener('keydown', triggerAdd);
-}
-
-async function renderWatchlist() {
-  const container = document.getElementById('wl-list');
-  const countEl = document.getElementById('wl-count');
-  if (!container) return;
-
-  const d = await browser.storage.local.get('companyWatchlist') as any;
-  const list: WatchlistEntry[] = d?.companyWatchlist ?? [];
-
-  if (countEl) countEl.textContent = `${list.length} WATCHING`;
-
-  if (list.length === 0) {
-    container.innerHTML = `<div class="empty-state" style="padding: 16px;">No watchlist entries yet.<br/>Add a company + role to get notified.</div>`;
-    return;
-  }
-
-  container.innerHTML = '';
-  const sorted = [...list].sort((a, b) => b.createdAt - a.createdAt);
-
-  sorted.forEach(entry => {
-    const card = document.createElement('div');
-    card.className = 'channel-card';
-    const initial = entry.company ? entry.company.charAt(0).toUpperCase() : '🎯';
-    const label = [entry.company, entry.role].filter(Boolean).join(' — ');
-    card.innerHTML = `
-      <div class="channel-av" style="background: rgba(240,255,0,0.08); border-color: rgba(240,255,0,0.25); color: var(--yellow);">${escHtml(String(initial))}</div>
-      <div class="channel-info">
-        <div class="channel-name">${escHtml(entry.company || 'Any Company')}</div>
-        <div class="channel-url" style="color: var(--yellow);">${escHtml(entry.role || 'Any Role')}</div>
-      </div>
-      <div class="ch-actions">
-        <button class="ch-btn del" title="Remove" data-id="${entry.id}">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </button>
-      </div>
-    `;
-
-    card.querySelector('.del')?.addEventListener('click', async () => {
-      card.style.opacity = '0';
-      card.style.transform = 'scale(0.95)';
-      card.style.transition = 'all 0.25s ease';
-      setTimeout(async () => {
-        const cur = await browser.storage.local.get('companyWatchlist') as any;
-        const updated = ((cur?.companyWatchlist ?? []) as WatchlistEntry[]).filter(x => x.id !== entry.id);
-        await browser.storage.local.set({ companyWatchlist: updated });
-        await renderWatchlist();
-      }, 250);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(input.value); }
+      if (e.key === 'Backspace' && !input.value) {
+        if (!profile) return;
+        const arr = profile[key] as string[];
+        if (arr.length > 0) {
+          const changes = { [key]: arr.slice(0, -1) };
+          browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes });
+        }
+      }
     });
 
-    container.appendChild(card);
+    input.addEventListener('blur', () => {
+      if (input.value) addTag(input.value);
+    });
+
+    wrap.addEventListener('click', () => input.focus());
   });
 }
 
-// ── Architect / Profile ─────────────────────────────────
-async function loadProfileData() {
+function renderTagsIntoWrap(wrapId: string, inputId: string, tags: string[]) {
+  const wrap = $(wrapId);
+  const input = $(inputId);
+  if (!wrap || !input) return;
+  wrap.querySelectorAll('.tag-pill').forEach(e => e.remove());
+  tags.forEach((val, idx) => {
+    const pill = document.createElement('div');
+    pill.className = 'tag-pill';
+    pill.innerHTML = `<span>${escapeHtml(val)}</span><span class="tag-x">&times;</span>`;
+    pill.querySelector('.tag-x')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!profile) return;
+      const key = wrapId.replace('-wrap', '') === 'roles' ? 'targetRoles' : wrapId.replace('-wrap', '') === 'locations' ? 'locations' : 'watchlistCompanies';
+      const arr = [...(profile[key as keyof UserProfile] as string[])];
+      arr.splice(idx, 1);
+      browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes: { [key]: arr } });
+    });
+    wrap.insertBefore(pill, input);
+  });
+}
+
+function setupSegmentedControls() {
+  document.querySelectorAll('#alert-segmented .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.getAttribute('data-val');
+      if (val) browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes: { alertMode: val } });
+    });
+  });
+
+  document.querySelectorAll('#feed-filter .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#feed-filter .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFeedFilter = btn.getAttribute('data-val') || 'all';
+      loadFeed();
+    });
+  });
+}
+
+// ────────────────────────────────────────────────────────
+// WATCHED PAGES
+// ────────────────────────────────────────────────────────
+async function checkCurrentTab() {
   try {
-    const userId = await getUserId();
-    const res = await fetch(`http://localhost:5000/api/profile`, { headers: { 'X-User-Id': userId } });
-    if (!res.ok) return;
-    const d = await res.json();
-    (document.getElementById('prof-skills') as HTMLInputElement).value = d.skills ?? '';
-    (document.getElementById('prof-experience') as HTMLTextAreaElement).value = d.experience ?? '';
-    (document.getElementById('prof-education') as HTMLTextAreaElement).value = d.education ?? '';
-    (document.getElementById('prof-projects') as HTMLTextAreaElement).value = d.projects ?? '';
-  } catch { /* backend offline */ }
-}
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url) return;
+    const url = tab.url;
 
-function wireProfileForm() {
-  const btn = document.getElementById('save-profile-btn') as HTMLButtonElement;
-  if (!btn) return;
-  btn.addEventListener('click', async () => {
-    const userId = await getUserId();
-    const body = {
-      skills: (document.getElementById('prof-skills') as HTMLInputElement).value,
-      experience: (document.getElementById('prof-experience') as HTMLTextAreaElement).value,
-      education: (document.getElementById('prof-education') as HTMLTextAreaElement).value,
-      projects: (document.getElementById('prof-projects') as HTMLTextAreaElement).value,
-    };
-    btn.textContent = 'SAVING...';
-    btn.disabled = true;
-    try {
-      const res = await fetch('http://localhost:5000/api/profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
-        body: JSON.stringify(body),
-      });
-      btn.textContent = res.ok ? '✓ SAVED!' : '✗ FAILED';
-    } catch {
-      btn.textContent = '✗ OFFLINE';
-    } finally {
-      setTimeout(() => { btn.textContent = 'SAVE MASTER RESUME'; btn.disabled = false; }, 2000);
+    if (!isCareerPage(url)) return;
+
+    const banner = $('current-page-banner');
+    const normalizedUrl = normalizeCareerUrl(url);
+    const alreadyTracked = trackedPages.some(p => p.normalizedUrl === normalizedUrl);
+
+    if (alreadyTracked) {
+      banner.style.display = 'none';
+      return;
     }
+
+    banner.innerHTML = `
+      <div class="add-page-banner">
+        <div class="add-page-banner-text">You're on a careers page — track it?</div>
+        <button class="btn-add-page" id="banner-add-btn">+ Add</button>
+      </div>
+    `;
+    banner.style.display = 'block';
+
+    $('banner-add-btn').addEventListener('click', async () => {
+      const btn = $('banner-add-btn') as HTMLButtonElement;
+      btn.disabled = true; btn.textContent = '…';
+      browser.runtime.sendMessage({ type: 'ADD_TRACKED_SEARCH', url });
+      banner.style.display = 'none';
+    });
+  } catch {}
+}
+
+function loadWatchedPages() {
+  const container = $('watched-list-container');
+  if (trackedPages.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🔍</div>
+        No pages tracked yet.<br />
+        Visit a careers page and click<br />"+ Track this page" or use the banner above.
+      </div>
+    `;
+    return;
+  }
+
+  let html = '<div class="watched-list">';
+  for (const s of trackedPages) {
+    const isError = s.lastScrapeStatus === 'error';
+    const isEmpty = s.lastScrapeStatus === 'empty';
+    const dotClass = isError ? 'error' : (s.lastScrapeStatus === 'ok' ? 'ok' : 'pending');
+    const lastTime = s.lastScrapedAt ? timeAgo(s.lastScrapedAt) : 'pending';
+
+    html += `
+      <div class="watched-row ${isError ? 'error' : ''}">
+        <div class="favicon-avatar"><img src="https://www.google.com/s2/favicons?domain=${escapeHtml(s.url)}&sz=16" onerror="this.style.display='none'"></div>
+        <div class="watched-info">
+          <div class="watched-domain" title="${escapeHtml(s.url)}">${escapeHtml(s.label)}</div>
+          <div class="watched-meta">
+            <span class="scrape-dot ${dotClass}"></span>
+            <span>${lastTime}</span>
+            ${isEmpty ? '<span style="color:var(--amber);">· no results</span>' : ''}
+          </div>
+        </div>
+        ${s.newJobCount > 0 ? `<span class="new-badge">${s.newJobCount} new</span>` : ''}
+        <button class="btn-trash" data-id="${s.id}" title="Remove">🗑</button>
+      </div>
+    `;
+  }
+  html += '</div>';
+  container.innerHTML = html;
+
+  container.querySelectorAll('.btn-trash').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLElement).dataset.id!;
+      browser.runtime.sendMessage({ type: 'DELETE_TRACKED_SEARCH', id });
+    });
   });
 }
 
-// ── Latency pinger ─────────────────────────────────────
-async function measureLatency() {
-  const el = document.getElementById('latency-display');
-  if (!el) return;
-  try {
-    const t0 = Date.now();
-    await fetch('http://localhost:5000/api/health', { method: 'GET' });
-    const ms = Date.now() - t0;
-    el.textContent = `LATENCY: ${ms}MS`;
-    el.style.color = ms < 100 ? '#00c851' : ms < 300 ? '#ffb700' : '#f87171';
-  } catch {
-    el.textContent = `LATENCY: --MS`;
-    el.style.color = '#f87171';
+// ────────────────────────────────────────────────────────
+// FEED TAB
+// ────────────────────────────────────────────────────────
+function updateFeedBadge() {
+  const count = unseenJobs.filter(j => !j.seenAt && !j.dismissed).length;
+  if (count > 0) {
+    feedBadge.textContent = String(count > 99 ? '99+' : count);
+    feedBadge.style.display = 'block';
+  } else {
+    feedBadge.style.display = 'none';
   }
 }
 
-// ── Helpers ────────────────────────────────────────────
-function cleanUrl(urlStr: string): string {
-  try {
-    const u = new URL(urlStr);
-    let s = u.hostname + (u.pathname !== '/' ? u.pathname : '');
-    return s.length > 42 ? s.slice(0, 39) + '...' : s;
-  } catch { return urlStr; }
+function loadFeed() {
+  const container = $('feed-list-container');
+  const markAllBtn = $('mark-all-btn');
+  let jobs = unseenJobs.filter(j => !j.dismissed && (!j.snoozedUntil || j.snoozedUntil < Date.now()));
+
+  const now = Date.now();
+  if (currentFeedFilter === 'today') {
+    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+    jobs = jobs.filter(j => j.firstSeenAt >= startOfDay.getTime());
+  } else if (currentFeedFilter === '7days') {
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    jobs = jobs.filter(j => j.firstSeenAt >= weekAgo);
+  }
+
+  if (jobs.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">📭</div>
+        No jobs match this filter.
+      </div>
+    `;
+    markAllBtn.style.display = 'none';
+    return;
+  }
+
+  const hasUnseen = jobs.some(j => !j.seenAt);
+  markAllBtn.style.display = hasUnseen ? 'block' : 'none';
+
+  let html = '<div class="feed-list">';
+  for (const job of jobs) {
+    const ago = timeAgo(job.firstSeenAt);
+    html += `
+      <div class="feed-card ${!job.seenAt ? 'unseen' : ''}" data-id="${job.id}" data-url="${escapeHtml(job.url)}">
+        <div class="feed-card-header">
+          <div class="feed-card-title">${escapeHtml(job.title)}</div>
+          <div class="feed-actions">
+            <button class="btn-icon btn-snooze" data-id="${job.id}" title="Snooze 1 day">⏳</button>
+            <button class="btn-icon btn-apply" data-id="${job.id}" title="Mark applied">✅</button>
+            <button class="btn-icon btn-dismiss" data-id="${job.id}" title="Not interested">✕</button>
+          </div>
+        </div>
+        <div class="feed-card-meta">
+          <span>${escapeHtml(job.companyName)}</span>
+          <span class="dot">·</span>
+          <span>${escapeHtml(job.location)}</span>
+          ${job.sourceDomain ? `<span class="dot">·</span><span class="pill-mini">${escapeHtml(job.sourceDomain)}</span>` : ''}
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px; margin-top: 8px;">
+          ${job.matchReason ? `<span class="match-badge">${escapeHtml(job.matchReason.replace('role:', 'Role: ').replace('company:', 'Company: '))}</span>` : ''}
+          <span class="time-label">${ago}</span>
+        </div>
+        ${!job.seenAt ? '<div class="new-dot"></div>' : ''}
+      </div>
+    `;
+  }
+  html += '</div>';
+  container.innerHTML = html;
+
+  container.querySelectorAll('.feed-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      // Ignore clicks on action buttons
+      if ((e.target as HTMLElement).closest('.btn-icon')) return;
+      const url = (card as HTMLElement).dataset.url!;
+      const id = (card as HTMLElement).dataset.id!;
+      browser.tabs.create({ url });
+      browser.runtime.sendMessage({ type: 'MARK_JOB_SEEN', jobId: id });
+    });
+  });
+
+  container.querySelectorAll('.btn-snooze').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLElement).dataset.id!;
+      browser.runtime.sendMessage({ type: 'SNOOZE_JOB', jobId: id, duration: 'tomorrow' });
+    });
+  });
+
+  container.querySelectorAll('.btn-dismiss').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLElement).dataset.id!;
+      browser.runtime.sendMessage({ type: 'DISMISS_JOB', jobId: id });
+    });
+  });
+
+  container.querySelectorAll('.btn-apply').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLElement).dataset.id!;
+      // Optimistic logic to move job to applied (requires new message handler, simplified here to dismiss for now + visual feedback)
+      browser.runtime.sendMessage({ type: 'DISMISS_JOB', jobId: id });
+      showToast('Marked as applied!');
+    });
+  });
+
+  markAllBtn.onclick = () => browser.runtime.sendMessage({ type: 'MARK_ALL_SEEN' });
 }
 
-function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// ────────────────────────────────────────────────────────
+// FOOTER
+// ────────────────────────────────────────────────────────
+function setupFooter() {
+  $('manage-profile-link').addEventListener('click', () => {
+    browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') });
+    window.close();
+  });
 }
+
+function pingBackend() {
+  browser.runtime.sendMessage({ type: 'PING' }).then(res => {
+    if (res?.online) {
+      latencyText.textContent = `Backend: ${res.latency}ms ✓`;
+      latencyDot.className = 'latency-dot ' + (res.latency < 100 ? 'green' : res.latency < 300 ? 'yellow' : 'red');
+    } else {
+      latencyText.textContent = 'Backend: offline ✗';
+      latencyDot.className = 'latency-dot red';
+    }
+  }).catch(() => {
+    latencyText.textContent = 'Backend: offline ✗';
+    latencyDot.className = 'latency-dot red';
+  });
+}
+
+function escapeHtml(str: string): string {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function showToast(msg: string) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2800);
+}
+
+init();

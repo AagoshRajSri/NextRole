@@ -3,12 +3,15 @@ import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
-
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import {
+  normalizeCareerUrl,
+  extractCompanyFromUrl,
+  detectPlatform,
+} from './utils.js';
 
 dotenv.config();
 
@@ -17,74 +20,29 @@ const prisma = new PrismaClient();
 const app = express();
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  }
+  cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 app.use(express.json());
 
-const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
-
-async function generateBedrockEmbedding(text: string): Promise<number[]> {
-  try {
-    const command = new InvokeModelCommand({
-      modelId: 'amazon.titan-embed-text-v2:0',
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify({ inputText: text.substring(0, 8000) })
-    });
-    const response = await bedrock.send(command);
-    const jsonString = new TextDecoder().decode(response.body);
-    const parsed = JSON.parse(jsonString);
-    return parsed.embedding || [];
-  } catch (err) {
-    console.error('[Server/Bedrock] Embedding Generation Failed:', err);
-    return [];
-  }
-}
-
-function getCompanyNameFromUrl(targetUrl: string): string {
-  try {
-    const urlObj = new URL(targetUrl);
-    const hostname = urlObj.hostname.toLowerCase();
-    
-    if (hostname.includes('greenhouse.io')) {
-      const parts = urlObj.pathname.split('/');
-      if (parts[1]) return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
-    } else if (hostname.includes('lever.co')) {
-      const parts = urlObj.pathname.split('/');
-      if (parts[1]) return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
-    } else if (hostname.includes('myworkdayjobs.com')) {
-      const parts = hostname.split('.');
-      return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
-    }
-    return hostname;
-  } catch (e) {
-    return 'Company Portal';
-  }
-}
-
-// Serve generated PDFs statically
+// ────────────────────────────────────────────────────────
+// STATIC FILE SERVING
+// ────────────────────────────────────────────────────────
 app.use('/resumes', express.static(path.join(__dirname, 'public/resumes')));
 
-// Enable CORS for Chrome Extension requests
+// ────────────────────────────────────────────────────────
+// CORS
+// ────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-User-Id');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE, PATCH');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: Date.now() });
-});
-
-
-// Initialize BullMQ Queue if Redis is configured
+// ────────────────────────────────────────────────────────
+// REDIS + BULLMQ
+// ────────────────────────────────────────────────────────
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 let monitorQueue: Queue | null = null;
 let redisSubscriber: Redis | null = null;
@@ -92,28 +50,25 @@ let redisSubscriber: Redis | null = null;
 try {
   const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
   monitorQueue = new Queue('monitorQueue', { connection });
-  console.log('[Server] Successfully connected to Redis for BullMQ.');
-  
-  // High-Performance Redis Pub/Sub Telemetry Layer
+  console.log('[Server] Connected to Redis for BullMQ.');
+
   redisSubscriber = new Redis(redisUrl, { maxRetriesPerRequest: null });
   redisSubscriber.subscribe('jobAlerts', (err) => {
-    if (err) console.error('[Server] Failed to subscribe to Redis jobAlerts channel', err);
-    else console.log('[Server] Successfully subscribed to Redis jobAlerts channel.');
+    if (err) console.error('[Server] Failed to subscribe to jobAlerts', err);
+    else console.log('[Server] Subscribed to Redis jobAlerts channel.');
   });
 } catch (e) {
-  console.warn('[Server] Redis not connected. BullMQ and Pub/Sub monitoring queue will be disabled locally.');
+  console.warn('[Server] Redis not connected. BullMQ disabled.');
 }
 
-// ----------------------------------------------------
-// SOCKET.IO REAL-TIME TELEMETRY REGISTRY
-// ----------------------------------------------------
+// ────────────────────────────────────────────────────────
+// SOCKET.IO TELEMETRY
+// ────────────────────────────────────────────────────────
 const activeSockets = new Map<string, any>();
 
 io.use((socket, next) => {
   const userId = socket.handshake.auth?.userId || socket.handshake.headers['x-user-id'];
-  if (!userId) {
-    return next(new Error("Unauthorized: JWT or User ID required"));
-  }
+  if (!userId) return next(new Error('Unauthorized: User ID required'));
   socket.data.userId = userId;
   next();
 });
@@ -121,11 +76,10 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   const userId = socket.data.userId;
   activeSockets.set(userId, socket);
-  console.log(`[Socket.io] 🟢 Client Connected: ${userId}`);
-
+  console.log(`[Socket.io] 🟢 Connected: ${userId}`);
   socket.on('disconnect', () => {
     activeSockets.delete(userId);
-    console.log(`[Socket.io] 🔴 Client Disconnected: ${userId}`);
+    console.log(`[Socket.io] 🔴 Disconnected: ${userId}`);
   });
 });
 
@@ -133,38 +87,40 @@ if (redisSubscriber) {
   redisSubscriber.on('message', (channel, message) => {
     if (channel === 'jobAlerts') {
       try {
-        const payload = JSON.parse(message);
-        const { userId, job } = payload;
+        const { userId, job } = JSON.parse(message);
         const userSocket = activeSockets.get(userId);
-        if (userSocket) {
-          // Emit lightweight JSON payload under 10ms directly down the active socket stream
-          userSocket.emit('JOB_ALERT_DISCOVERED', job);
-        }
+        if (userSocket) userSocket.emit('JOB_ALERT_DISCOVERED', job);
       } catch (err) {
-        console.error('[Server] Error parsing jobAlerts payload:', err);
+        console.error('[Server] Error parsing jobAlerts:', err);
       }
     }
   });
 }
 
-// Helper to get User ID from headers
-const getUserId = (req: express.Request): string => {
-  return (req.header('X-User-Id') || 'default-user').trim();
-};
+// ────────────────────────────────────────────────────────
+// HELPERS
+// ────────────────────────────────────────────────────────
+const getUserId = (req: express.Request): string =>
+  (req.header('X-User-Id') || 'default-user').trim();
 
-/**
- * ----------------------------------------------------
- * TRACKED SEARCHES API
- * ----------------------------------------------------
- */
+// ────────────────────────────────────────────────────────
+// HEALTH
+// ────────────────────────────────────────────────────────
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: Date.now() });
+});
 
-// GET /api/tracked-searches - List all saved searches for user
+// ════════════════════════════════════════════════════════
+// TRACKED SEARCHES API
+// ════════════════════════════════════════════════════════
+
+// GET — list all tracked searches + scrape status + new job count
 app.get('/api/tracked-searches', async (req, res) => {
   const userId = getUserId(req);
   try {
     const searches = await prisma.trackedSearch.findMany({
       where: { userId },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
     res.json(searches);
   } catch (err: any) {
@@ -172,37 +128,33 @@ app.get('/api/tracked-searches', async (req, res) => {
   }
 });
 
-// POST /api/tracked-searches - Add a new saved search
+// POST — add a new tracked URL (normalised, deduped, auto-detect platform)
 app.post('/api/tracked-searches', async (req, res) => {
   const userId = getUserId(req);
-  const { url, platform } = req.body;
+  const { url } = req.body;
 
-  if (!url || !platform) {
-    return res.status(400).json({ error: 'URL and platform are required.' });
-  }
+  if (!url) return res.status(400).json({ error: 'URL is required.' });
+
+  const normalised = normalizeCareerUrl(url);
+  const platform = req.body.platform || detectPlatform(normalised);
 
   try {
-    // Avoid exact duplicate URL searches for the same user
-    const existing = await prisma.trackedSearch.findFirst({
-      where: { userId, url }
+    const existing = await prisma.trackedSearch.findUnique({
+      where: { userId_url: { userId, url: normalised } },
     });
 
     if (existing) {
-      return res.status(200).json(existing);
+      return res.status(409).json({ ...existing, message: 'Already tracked.' });
     }
 
     const newSearch = await prisma.trackedSearch.create({
-      data: {
-        userId,
-        url,
-        platform
-      }
+      data: { userId, url: normalised, platform },
     });
 
-    // Proactively queue an immediate scraping job for this newly tracked search
+    // Queue immediate scrape
     if (monitorQueue) {
-      await monitorQueue.add('scrape-single', { searchId: newSearch.id, url: newSearch.url });
-      console.log(`[Server] Queued immediate scrape for new search: ${newSearch.id}`);
+      await monitorQueue.add('scrape-single', { searchId: newSearch.id, url: normalised });
+      console.log(`[Server] Queued immediate scrape for: ${newSearch.id}`);
     }
 
     res.status(201).json(newSearch);
@@ -211,80 +163,162 @@ app.post('/api/tracked-searches', async (req, res) => {
   }
 });
 
-// DELETE /api/tracked-searches/:id - Delete a saved search
+// DELETE — remove a tracked search
 app.delete('/api/tracked-searches/:id', async (req, res) => {
-  const { id } = req.params;
   try {
-    await prisma.trackedSearch.delete({
-      where: { id }
-    });
-    res.json({ success: true, message: 'Saved search deleted successfully.' });
+    await prisma.trackedSearch.delete({ where: { id: req.params.id } });
+    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * ----------------------------------------------------
- * JOB SNAPSHOTS & BACKGROUND POLLING API
- * ----------------------------------------------------
- */
+// ════════════════════════════════════════════════════════
+// NEW JOBS POLLING API
+// ════════════════════════════════════════════════════════
 
-// GET /api/new-jobs - Poll for newly detected jobs (extension background worker calls this)
 app.get('/api/new-jobs', async (req, res) => {
   const userId = getUserId(req);
   try {
-    // Fetch all job snapshots marked as 'isNew' for the user's searches
     const newJobs = await prisma.jobSnapshot.findMany({
       where: {
         isNew: true,
-        trackedSearch: { userId }
+        trackedSearch: { userId },
       },
-      include: {
-        trackedSearch: true
-      },
-      orderBy: { firstSeenAt: 'desc' }
+      include: { trackedSearch: true },
+      orderBy: { firstSeenAt: 'desc' },
     });
 
-    // Mark these jobs as processed (isNew = false) so we don't notify twice
+    // Mark as polled (isNew = false)
     if (newJobs.length > 0) {
       await prisma.jobSnapshot.updateMany({
-        where: {
-          id: { in: newJobs.map(job => job.id) }
-        },
-        data: { isNew: false }
+        where: { id: { in: newJobs.map(j => j.id) } },
+        data: { isNew: false },
       });
     }
 
-    res.json(newJobs.map(job => ({
-      id: job.id,
-      companyName: getCompanyNameFromUrl(job.trackedSearch.url),
-      title: job.title,
-      location: job.location,
-      url: job.url,
-      atsJobId: job.atsJobId,
-      firstSeenAt: job.firstSeenAt
-    })));
+    res.json(
+      newJobs.map(job => ({
+        id: job.id,
+        companyName: job.companyName || extractCompanyFromUrl(job.trackedSearch.url) || 'Company',
+        title: job.title,
+        location: job.location,
+        url: job.url,
+        atsJobId: job.atsJobId,
+        matchReason: job.matchReason,
+        firstSeenAt: job.firstSeenAt,
+        trackedSearchId: job.trackedSearchId,
+      })),
+    );
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * ----------------------------------------------------
- * PROFILE (MASTER RESUME) API
- * ----------------------------------------------------
- */
+// ════════════════════════════════════════════════════════
+// ALL JOBS (FEED) API
+// ════════════════════════════════════════════════════════
 
-// GET /api/profile - Fetch master resume profile
+app.get('/api/jobs', async (req, res) => {
+  const userId = getUserId(req);
+  const range = (req.query.range as string) || 'all';
+
+  let dateFilter: any = {};
+  if (range === 'today') {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    dateFilter = { firstSeenAt: { gte: startOfDay } };
+  } else if (range === '7days') {
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    dateFilter = { firstSeenAt: { gte: weekAgo } };
+  }
+
+  try {
+    const jobs = await prisma.jobSnapshot.findMany({
+      where: {
+        trackedSearch: { userId },
+        matchReason: { not: null },
+        ...dateFilter,
+      },
+      include: { trackedSearch: { select: { url: true, platform: true } } },
+      orderBy: { firstSeenAt: 'desc' },
+      take: 200,
+    });
+
+    res.json(
+      jobs.map(j => ({
+        id: j.id,
+        title: j.title,
+        companyName: j.companyName || extractCompanyFromUrl(j.trackedSearch.url) || 'Company',
+        location: j.location,
+        url: j.url,
+        matchReason: j.matchReason,
+        firstSeenAt: j.firstSeenAt,
+        seenAt: j.seenAt,
+        sourceDomain: new URL(j.trackedSearch.url).hostname,
+      })),
+    );
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════
+// JOB SEEN ENDPOINTS
+// ════════════════════════════════════════════════════════
+
+// PATCH — mark single job as seen
+app.patch('/api/jobs/:id/seen', async (req, res) => {
+  try {
+    await prisma.jobSnapshot.update({
+      where: { id: req.params.id },
+      data: { seenAt: new Date(), isNew: false },
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST — mark all jobs as seen for user
+app.post('/api/jobs/seen-all', async (req, res) => {
+  const userId = getUserId(req);
+  try {
+    const trackedSearches = await prisma.trackedSearch.findMany({
+      where: { userId },
+      select: { id: true },
+    });
+    const searchIds = trackedSearches.map(s => s.id);
+
+    await prisma.jobSnapshot.updateMany({
+      where: {
+        trackedSearchId: { in: searchIds },
+        seenAt: null,
+      },
+      data: { seenAt: new Date(), isNew: false },
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════
+// USER PROFILE API
+// ════════════════════════════════════════════════════════
+
 app.get('/api/profile', async (req, res) => {
   const userId = getUserId(req);
   try {
-    const profile = await prisma.userProfile.findUnique({
-      where: { userId }
-    });
+    const profile = await prisma.userProfile.findUnique({ where: { userId } });
     if (!profile) {
-      return res.json({ experience: '', skills: '', education: '', projects: '' });
+      return res.json({
+        name: '', phone: '', email: '', linkedinUrl: '',
+        targetRoles: [], locations: [], watchlistCompanies: [],
+        experienceLevel: '', alertMode: 'instant', emailAlerts: false,
+        isOnboarded: false, monitorActive: false,
+        experience: '', skills: '', education: '', projects: '',
+      });
     }
     res.json(profile);
   } catch (err: any) {
@@ -292,43 +326,40 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 
-// POST /api/profile - Create or update master resume profile
 app.post('/api/profile', async (req, res) => {
   const userId = getUserId(req);
-  const { experience, skills, education, projects } = req.body;
+  const {
+    name, phone, email, linkedinUrl,
+    targetRoles, locations, watchlistCompanies,
+    experienceLevel, alertMode, emailAlerts,
+    isOnboarded, monitorActive,
+    experience, skills, education, projects,
+  } = req.body;
 
   try {
-    const profileText = `${experience || ''} ${skills || ''} ${education || ''} ${projects || ''}`.trim();
-    let embedding: number[] = [];
-    if (profileText) {
-      embedding = await generateBedrockEmbedding(profileText);
-    }
+    const data: any = {};
+    if (name !== undefined) data.name = name;
+    if (phone !== undefined) data.phone = phone;
+    if (email !== undefined) data.email = email;
+    if (linkedinUrl !== undefined) data.linkedinUrl = linkedinUrl;
+    if (targetRoles !== undefined) data.targetRoles = targetRoles;
+    if (locations !== undefined) data.locations = locations;
+    if (watchlistCompanies !== undefined) data.watchlistCompanies = watchlistCompanies;
+    if (experienceLevel !== undefined) data.experienceLevel = experienceLevel;
+    if (alertMode !== undefined) data.alertMode = alertMode;
+    if (emailAlerts !== undefined) data.emailAlerts = emailAlerts;
+    if (isOnboarded !== undefined) data.isOnboarded = isOnboarded;
+    if (monitorActive !== undefined) data.monitorActive = monitorActive;
+    if (experience !== undefined) data.experience = experience;
+    if (skills !== undefined) data.skills = skills;
+    if (education !== undefined) data.education = education;
+    if (projects !== undefined) data.projects = projects;
 
     const profile = await prisma.userProfile.upsert({
       where: { userId },
-      update: {
-        experience: experience || '',
-        skills: skills || '',
-        education: education || '',
-        projects: projects || ''
-      },
-      create: {
-        userId,
-        experience: experience || '',
-        skills: skills || '',
-        education: education || '',
-        projects: projects || ''
-      }
+      update: data,
+      create: { userId, ...data },
     });
-
-    if (embedding.length > 0) {
-      await prisma.$executeRawUnsafe(
-        `UPDATE "UserProfile" SET "profileEmbedding" = $1::vector WHERE "userId" = $2`,
-        `[${embedding.join(',')}]`,
-        userId
-      );
-      console.log(`[Server] Updated profile embedding for user: ${userId}`);
-    }
 
     res.json(profile);
   } catch (err: any) {
@@ -336,143 +367,89 @@ app.post('/api/profile', async (req, res) => {
   }
 });
 
-/**
- * ----------------------------------------------------
- * TAILORED RESUMES API
- * ----------------------------------------------------
- */
+// ════════════════════════════════════════════════════════
+// RESUME TAILORING API (kept for premium — no changes)
+// ════════════════════════════════════════════════════════
 
-// GET /api/resumes/lookup - Query tailored resume by active URL
-app.get('/api/resumes/lookup', async (req, res) => {
-  const url = req.query.url as string;
+const FREE_TIER_MAX_RUNS = 5;
+
+async function verifyTokenBudget(req: express.Request, res: express.Response, next: express.NextFunction) {
   const userId = getUserId(req);
-
-  if (!url) {
-    return res.status(400).json({ error: 'URL is required.' });
-  }
-
   try {
-    const snapshot = await prisma.jobSnapshot.findFirst({
-      where: {
-        url: {
-          contains: url
-        },
-        trackedSearch: { userId }
-      },
-      include: {
-        tailoredResumes: {
-          orderBy: { createdAt: 'desc' },
-          take: 1
-        }
-      }
-    });
-
-    if (!snapshot || snapshot.tailoredResumes.length === 0) {
-      return res.status(404).json({ error: 'No tailored resume found for this job.' });
+    const user = await prisma.userProfile.findUnique({ where: { userId } });
+    if (!user) return res.status(404).json({ error: 'User profile not found.' });
+    if (!user.isPremium && user.monthlyRunsUsed >= FREE_TIER_MAX_RUNS) {
+      return res.status(402).json({
+        error: 'TOKEN_LIMIT_EXCEEDED',
+        message: 'You have reached your 5 free AI runs. Upgrade to Premium for unlimited.',
+      });
     }
-
-    res.json({
-      snapshot,
-      resume: snapshot.tailoredResumes[0]
+    await prisma.userProfile.update({
+      where: { userId },
+      data: { monthlyRunsUsed: { increment: 1 } },
     });
+    next();
+  } catch {
+    res.status(500).json({ error: 'Internal error verifying limits.' });
+  }
+}
+
+app.post('/api/resumes/tailor', verifyTokenBudget, async (req, res) => {
+  const userId = getUserId(req);
+  const { jobSnapshotId, companyName } = req.body;
+  if (!jobSnapshotId || !companyName) {
+    return res.status(400).json({ error: 'jobSnapshotId and companyName are required.' });
+  }
+  try {
+    const jobSnapshot = await prisma.jobSnapshot.findUnique({ where: { id: jobSnapshotId } });
+    if (!jobSnapshot) return res.status(404).json({ error: 'Job snapshot not found.' });
+    if (monitorQueue) {
+      await monitorQueue.add('resume-tailoring', { userId, company: companyName, jobSnapshot });
+      return res.status(202).json({ message: 'Resume tailoring queued.' });
+    }
+    res.status(503).json({ error: 'Queue not active.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/resumes/:jobId - Get tailored resume for a specific job snapshot
+app.get('/api/resumes/lookup', async (req, res) => {
+  const url = req.query.url as string;
+  const userId = getUserId(req);
+  if (!url) return res.status(400).json({ error: 'URL required.' });
+  try {
+    const snapshot = await prisma.jobSnapshot.findFirst({
+      where: { url: { contains: url }, trackedSearch: { userId } },
+      include: { tailoredResumes: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+    if (!snapshot || snapshot.tailoredResumes.length === 0) {
+      return res.status(404).json({ error: 'No tailored resume found.' });
+    }
+    res.json({ snapshot, resume: snapshot.tailoredResumes[0] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/resumes/:jobId', async (req, res) => {
-  const { jobId } = req.params;
   try {
     const resume = await prisma.tailoredResume.findFirst({
-      where: { jobSnapshotId: jobId },
-      orderBy: { createdAt: 'desc' }
+      where: { jobSnapshotId: req.params.jobId },
+      orderBy: { createdAt: 'desc' },
     });
-    if (!resume) {
-      return res.status(404).json({ error: 'Tailored resume not found for this job.' });
-    }
+    if (!resume) return res.status(404).json({ error: 'Resume not found.' });
     res.json(resume);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
-
-const FREE_TIER_MAX_RUNS = 5;
-
-export async function verifyTokenBudget(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const userId = getUserId(req);
-
-  try {
-    const user = await prisma.userProfile.findUnique({
-      where: { userId }
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: "User profile console not found." });
-    }
-
-    // Check if user is a premium tier subscriber
-    if (!user.isPremium) {
-      // If free tier, enforce hard cap ceiling
-      if (user.monthlyRunsUsed >= FREE_TIER_MAX_RUNS) {
-        return res.status(402).json({
-          error: "TOKEN_LIMIT_EXCEEDED",
-          message: "You have reached your 5 free AI customizations for this month. Upgrade to Premium for infinite bandwidth or supply a custom API key under settings."
-        });
-      }
-    }
-
-    // If validations pass, increment count and handoff request to compiler queue
-    await prisma.userProfile.update({
-      where: { userId },
-      data: { monthlyRunsUsed: { increment: 1 } }
-    });
-
-    next();
-  } catch (error) {
-    return res.status(500).json({ error: "Internal Gateway Error verifying pipeline limits." });
-  }
-}
-
-// POST /api/resumes/tailor - Trigger an AI resume tailoring job
-app.post('/api/resumes/tailor', verifyTokenBudget, async (req, res) => {
-  const userId = getUserId(req);
-  const { jobSnapshotId, companyName } = req.body;
-
-  if (!jobSnapshotId || !companyName) {
-    return res.status(400).json({ error: "jobSnapshotId and companyName are required." });
-  }
-
-  try {
-    const jobSnapshot = await prisma.jobSnapshot.findUnique({
-      where: { id: jobSnapshotId }
-    });
-
-    if (!jobSnapshot) {
-      return res.status(404).json({ error: "Job snapshot not found." });
-    }
-
-    if (monitorQueue) {
-      await monitorQueue.add('resume-tailoring', {
-        userId,
-        company: companyName,
-        jobSnapshot
-      });
-      return res.status(202).json({ message: "Resume tailoring job queued successfully." });
-    } else {
-      return res.status(503).json({ error: "Job queue is not active." });
-    }
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// START EXPRESS SERVER
+// ════════════════════════════════════════════════════════
+// START SERVER
+// ════════════════════════════════════════════════════════
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`\n🚀 NextRole Backend Running on http://localhost:${PORT}`);
   console.log(`- API endpoints: http://localhost:${PORT}/api/*`);
-  console.log(`- Socket.io Real-Time Telemetry Active`);
+  console.log(`- Socket.io Telemetry Active`);
 });
