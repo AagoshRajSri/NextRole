@@ -9,6 +9,9 @@ const TEST_URLS = [
   { platform: 'naukri',      url: 'https://www.naukri.com/software-engineer-jobs' },
   { platform: 'ashby',       url: 'https://jobs.ashbyhq.com/linear' },
   { platform: 'wellfound',   url: 'https://wellfound.com/company/stripe/jobs' },
+  { platform: 'apple',       url: 'https://jobs.apple.com/en-us/search?team=Internships-STDNT-INTRN' },
+  { platform: 'google',      url: 'https://www.google.com/about/careers/applications/jobs/results' },
+  { platform: 'linkedin',    url: 'https://www.linkedin.com/company/google/jobs/' },
 ];
 
 async function main() {

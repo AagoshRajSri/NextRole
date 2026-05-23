@@ -25,6 +25,7 @@ export interface BrowserOptions {
   sessionDir?: string        // persist cookies/session to this directory
   proxy?: string             // http://user:pass@host:port
   timeout?: number           // navigation timeout in ms (default: 30000)
+  disableResourceBlocking?: boolean // if true, don't block images/fonts
 }
 
 export class BrowserFactory {
@@ -107,28 +108,30 @@ export class BrowserFactory {
     const page = await context.newPage()
     
     // Block unnecessary resources to speed up scraping
-    await page.route('**/*', (route) => {
-      const resourceType = route.request().resourceType()
-      const url = route.request().url()
-      
-      // Block tracking, analytics, and heavy media
-      const blocked = [
-        'google-analytics', 'googletagmanager', 'facebook.net', 'doubleclick',
-        'hotjar', 'fullstory', 'heap-api', 'segment.io', 'mixpanel',
-        'amplitude', 'intercom', 'zendesk',
-      ]
-      
-      if (
-        resourceType === 'media' ||
-        (resourceType === 'image' && !url.includes('favicon')) ||
-        (resourceType === 'font' && !url.includes('linkedin')) ||
-        blocked.some(b => url.includes(b))
-      ) {
-        route.abort()
-      } else {
-        route.continue()
-      }
-    })
+    if (!options.disableResourceBlocking) {
+      await page.route('**/*', (route) => {
+        const resourceType = route.request().resourceType()
+        const url = route.request().url()
+        
+        // Block tracking, analytics, and heavy media
+        const blocked = [
+          'google-analytics', 'googletagmanager', 'facebook.net', 'doubleclick',
+          'hotjar', 'fullstory', 'heap-api', 'segment.io', 'mixpanel',
+          'amplitude', 'intercom', 'zendesk',
+        ]
+        
+        if (
+          resourceType === 'media' ||
+          (resourceType === 'image' && !url.includes('favicon')) ||
+          (resourceType === 'font' && !url.includes('linkedin')) ||
+          blocked.some(b => url.includes(b))
+        ) {
+          route.abort()
+        } else {
+          route.continue()
+        }
+      })
+    }
 
     page.setDefaultTimeout(options.timeout || 30000)
     page.setDefaultNavigationTimeout(options.timeout || 30000)

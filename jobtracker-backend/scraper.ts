@@ -43,6 +43,8 @@ function detectPlatform(url: string): string {
   if (host.includes('naukri.com')) return 'naukri';
   if (host.includes('smartrecruiters.com')) return 'smartrecruiters';
   if (host.includes('workable.com')) return 'workable';
+  if (host.includes('apple.com')) return 'apple';
+  if (host.includes('google.com') && url.includes('careers')) return 'google';
   return 'generic';
 }
 
@@ -57,6 +59,8 @@ export async function scrapeJobsWithResult(url: string, options?: BrowserOptions
     case 'amazon_jobs': return scrapeAmazonJobs(url, options);
     case 'ashby':      return scrapeAshby(url, options);
     case 'naukri':     return scrapeNaukri(url, options);
+    case 'apple':      return scrapeApple(url);
+    case 'google':     return scrapeGoogleCareers(url, options);
     default:           return scrapeGeneric(url, options);
   }
 }
@@ -68,7 +72,7 @@ function detectBlock(page: Page, html: string, platform: string): string | null 
   if (lc.includes('access denied')) return 'access denied page';
   if (lc.includes('captcha') && lc.includes('solve')) return 'captcha challenge';
   if (lc.includes('are you a robot') || lc.includes('are you human')) return 'bot challenge';
-  if (lc.includes('429') || lc.includes('too many requests')) return 'rate limited (429)';
+  if ((lc.includes('429') && lc.includes('too many requests')) || lc.includes('status code 429')) return 'rate limited (429)';
   if (lc.includes('cf-error') || lc.includes('cloudflare') && lc.includes('error')) return 'Cloudflare block';
   if (lc.includes('blocked') && lc.includes('automated')) return 'automation detected';
   
@@ -80,6 +84,109 @@ function detectBlock(page: Page, html: string, platform: string): string | null 
   }
   
   return null;
+}
+
+// ════════════════════════════════════════════════════════
+// APPLE
+// ════════════════════════════════════════════════════════
+async function scrapeApple(url: string): Promise<ScraperResult> {
+  const start = Date.now();
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html',
+        'Accept-Language': 'en-US'
+      }
+    });
+    
+    if (!res.ok) {
+      return { jobs: [], status: 'error', jobsCount: 0, platform: 'apple', errorMessage: `HTTP ${res.status}`, scrapeDurationMs: Date.now() - start };
+    }
+    
+    const html = await res.text();
+    const match = html.match(/window\.__staticRouterHydrationData\s*=\s*JSON\.parse\("(.+?)"\);<\/script>/s);
+    if (!match) {
+      return { jobs: [], status: 'empty', jobsCount: 0, platform: 'apple', scrapeDurationMs: Date.now() - start };
+    }
+    
+    const jsonStr = match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').replace(/\\n/g, '').replace(/\\r/g, '');
+    const data = JSON.parse(jsonStr);
+    const searchResults = data?.loaderData?.search?.searchResults || [];
+    
+    const jobs: ScrapedJob[] = searchResults.map((job: any) => {
+      let loc = 'Remote / Unspecified';
+      if (job.locations && job.locations.length > 0) {
+        loc = job.locations[0].name || loc;
+      }
+      return {
+        atsJobId: job.id,
+        title: job.postingTitle || '',
+        companyName: 'Apple',
+        location: loc,
+        url: `https://jobs.apple.com/en-us/details/${job.id}`
+      };
+    });
+    
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length, platform: 'apple', scrapeDurationMs: Date.now() - start, pageTitle: 'Apple Jobs' };
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'apple', errorMessage: err.message, scrapeDurationMs: Date.now() - start };
+  }
+}
+
+// ════════════════════════════════════════════════════════
+// GOOGLE CAREERS
+// ════════════════════════════════════════════════════════
+async function scrapeGoogleCareers(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now();
+  // Google is aggressive about headless detection. Stealth is required.
+  const { page, cleanup } = await BrowserFactory.getPage({ ...options, stealth: true, disableResourceBlocking: true });
+  
+  try {
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(3000); // Allow React to hydrate jobs
+    
+    const html = await page.content();
+    const blocked = detectBlock(page, html, 'google');
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'google', blockedReason: blocked, scrapeDurationMs: Date.now() - start };
+    }
+    
+    // Google job cards usually have class 'lLd3Je' or are list items inside 'ul'
+    const jobs = await page.evaluate(() => {
+      const results: ScrapedJob[] = [];
+      const cards = document.querySelectorAll('li.lLd3Je, [jscontroller="xkZ6y"], div[class*="job-results"] li');
+      
+      cards.forEach((card) => {
+        const titleEl = card.querySelector('h3, h2, [class*="title"]');
+        const locEl = card.querySelector('[class*="location"], span.r0wTof, span[jsname="pwemIf"]');
+        const linkEl = card.querySelector('a[href*="jobs/results/"]') || card.querySelector('a');
+        
+        if (titleEl && linkEl) {
+          const title = titleEl.textContent?.trim() || '';
+          const location = locEl?.textContent?.trim() || 'Remote / Unspecified';
+          const href = linkEl.getAttribute('href') || '';
+          let atsJobId = href.split('/').pop()?.split('?')[0] || String(Math.random());
+          if (atsJobId.includes('-')) atsJobId = atsJobId.split('-').pop() || atsJobId;
+          
+          results.push({
+            atsJobId,
+            title,
+            companyName: 'Google',
+            location,
+            url: href.startsWith('http') ? href : new URL(href, window.location.href).href,
+          });
+        }
+      });
+      return results;
+    });
+    
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length, platform: 'google', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() };
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'google', errorMessage: err.message, scrapeDurationMs: Date.now() - start };
+  } finally {
+    await cleanup();
+  }
 }
 
 // ════════════════════════════════════════════════════════
@@ -292,7 +399,56 @@ async function scrapeNaukri(url: string, options?: BrowserOptions): Promise<Scra
 // ════════════════════════════════════════════════════════
 async function scrapeLinkedIn(url: string, options?: BrowserOptions): Promise<ScraperResult> {
   const start = Date.now()
-  const { page, cleanup } = await BrowserFactory.getPage({ stealth: true, ...options })
+  
+  // Try Guest API first for company pages
+  const companyMatch = url.match(/linkedin\.com\/company\/([^/]+)/)
+  if (companyMatch) {
+    try {
+      const companySlug = companyMatch[1]
+      const guestUrl = `https://www.linkedin.com/jobs/${companySlug}-jobs`
+      const res = await fetch(guestUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' }
+      })
+      if (res.ok) {
+        const html = await res.text()
+        const jobs: ScrapedJob[] = []
+        
+        // Find all job list items
+        let currentIndex = 0
+        while (true) {
+          const cardStart = html.indexOf('base-search-card', currentIndex)
+          if (cardStart === -1) break
+          const cardEnd = html.indexOf('base-search-card', cardStart + 1)
+          const cardHtml = cardEnd === -1 ? html.substring(cardStart) : html.substring(cardStart, cardEnd)
+          
+          const idMatch = cardHtml.match(/data-entity-urn="urn:li:jobPosting:(\d+)"/)
+          const titleMatch = cardHtml.match(/<h3 class="base-search-card__title">\s*(.+?)\s*<\/h3>/) || cardHtml.match(/<span class="sr-only">\s*(.+?)\s*<\/span>/)
+          const compMatch = cardHtml.match(/<h4 class="base-search-card__subtitle">\s*<a[^>]*>\s*(.+?)\s*<\/a>/) || cardHtml.match(/<h4 class="base-search-card__subtitle">\s*(.+?)\s*<\/h4>/)
+          const locMatch = cardHtml.match(/class="job-search-card__location"[^>]*>\s*(.+?)\s*<\/span>/)
+          const hrefMatch = cardHtml.match(/href="([^"?]+)[^"]*"/)
+          
+          if (titleMatch && idMatch) {
+            jobs.push({
+              atsJobId: idMatch[1],
+              title: titleMatch[1].trim(),
+              companyName: compMatch ? compMatch[1].trim() : '',
+              location: locMatch ? locMatch[1].trim() : '',
+              url: hrefMatch ? hrefMatch[1] : `https://www.linkedin.com/jobs/view/${idMatch[1]}`,
+            })
+          }
+          
+          currentIndex = cardStart + 1
+        }
+        if (jobs.length > 0) {
+          return { jobs, status: 'ok', jobsCount: jobs.length, platform: 'linkedin', scrapeDurationMs: Date.now() - start }
+        }
+      }
+    } catch (e) {
+      console.warn('LinkedIn Guest API failed:', e)
+    }
+  }
+
+  const { page, cleanup } = await BrowserFactory.getPage({ stealth: true, disableResourceBlocking: true, ...options })
   
   try {
     // Step 1: Navigate with realistic behavior
