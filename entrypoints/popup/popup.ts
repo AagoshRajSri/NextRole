@@ -133,23 +133,24 @@ function renderMonitorState() {
     monitorToggle.classList.remove('on');
   }
 
-  const ago = monitorState.lastPollAt ? timeAgo(monitorState.lastPollAt) : 'No scan yet';
+  const ago = monitorState?.lastPollAt ? timeAgo(monitorState.lastPollAt) : 'No scan yet';
   let matchesHtml = '';
-  if (monitorState.lastCycleMatchCount > 0) {
+  if (monitorState?.lastCycleMatchCount > 0) {
     matchesHtml = `<br><span style="color:#00FF88;">Last scan: found ${monitorState.lastCycleMatchCount} matches</span>`;
-  } else if (monitorState.lastPollAt) {
+  } else if (monitorState?.lastPollAt) {
     matchesHtml = `<br><span style="color:#5A7A9A;">Last scan: no new matches</span>`;
   }
-  monitorMeta.innerHTML = `Monitoring ${trackedPages.length} page${trackedPages.length !== 1 ? 's' : ''} · Last scan: ${ago}${matchesHtml}`;
+  const tPages = trackedPages || [];
+  monitorMeta.innerHTML = `Monitoring ${tPages.length} page${tPages.length !== 1 ? 's' : ''} · Last scan: ${ago}${matchesHtml}`;
 
-  // Populate tag inputs (only if not currently focused to prevent jumping)
-  if (document.activeElement?.id !== 'roles-input') renderTagsIntoWrap('roles-wrap', 'roles-input', profile.targetRoles);
-  if (document.activeElement?.id !== 'locations-input') renderTagsIntoWrap('locations-wrap', 'locations-input', profile.locations);
-  if (document.activeElement?.id !== 'companies-input') renderTagsIntoWrap('companies-wrap', 'companies-input', profile.watchlistCompanies);
+  // Populate tag inputs
+  renderTagsIntoWrap('roles-wrap', 'roles-input', profile?.targetRoles || []);
+  renderTagsIntoWrap('locations-wrap', 'locations-input', profile?.locations || []);
+  renderTagsIntoWrap('companies-wrap', 'companies-input', profile?.watchlistCompanies || []);
 
   // Set alert mode
   document.querySelectorAll('#alert-segmented .seg-btn').forEach(b => {
-    b.classList.toggle('active', b.getAttribute('data-val') === profile!.alertMode);
+    b.classList.toggle('active', b.getAttribute('data-val') === profile?.alertMode);
   });
 }
 
@@ -176,7 +177,7 @@ function setupTagInputs() {
     const addTag = (val: string) => {
       if (!profile) return;
       const clean = val.trim();
-      const arr = profile[key] as string[];
+      const arr = (profile[key] as string[]) || [];
       if (clean && !arr.includes(clean)) {
         const changes = { [key]: [...arr, clean] };
         browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes });
@@ -188,7 +189,7 @@ function setupTagInputs() {
       if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(input.value); }
       if (e.key === 'Backspace' && !input.value) {
         if (!profile) return;
-        const arr = profile[key] as string[];
+        const arr = (profile[key] as string[]) || [];
         if (arr.length > 0) {
           const changes = { [key]: arr.slice(0, -1) };
           browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes });
@@ -209,7 +210,7 @@ function renderTagsIntoWrap(wrapId: string, inputId: string, tags: string[]) {
   const input = $(inputId);
   if (!wrap || !input) return;
   wrap.querySelectorAll('.tag-pill').forEach(e => e.remove());
-  tags.forEach((val, idx) => {
+  (tags || []).forEach((val, idx) => {
     const pill = document.createElement('div');
     pill.className = 'tag-pill';
     pill.innerHTML = `<span>${escapeHtml(val)}</span><span class="tag-x">&times;</span>`;
@@ -217,7 +218,7 @@ function renderTagsIntoWrap(wrapId: string, inputId: string, tags: string[]) {
       e.stopPropagation();
       if (!profile) return;
       const key = wrapId.replace('-wrap', '') === 'roles' ? 'targetRoles' : wrapId.replace('-wrap', '') === 'locations' ? 'locations' : 'watchlistCompanies';
-      const arr = [...(profile[key as keyof UserProfile] as string[])];
+      const arr = [...((profile[key as keyof UserProfile] as string[]) || [])];
       arr.splice(idx, 1);
       browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes: { [key]: arr } });
     });
@@ -387,7 +388,7 @@ function loadWatchedPages() {
   function updatePreview() {
     const kw = encodeURIComponent(kwInput.value.trim());
     const loc = encodeURIComponent(locInput.value.trim());
-    const url = \`https://www.linkedin.com/jobs/search?keywords=\${kw}&location=\${loc}&f_TPR=r86400\`;
+    const url = `https://www.linkedin.com/jobs/search?keywords=${kw}&location=${loc}&f_TPR=r86400`;
     preview.textContent = url;
   }
   
