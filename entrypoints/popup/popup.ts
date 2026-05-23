@@ -296,27 +296,79 @@ function loadWatchedPages() {
   let html = '<div class="watched-list">';
   for (const s of trackedPages) {
     const isError = s.lastScrapeStatus === 'error';
+    const isBlocked = s.lastScrapeStatus === 'blocked';
     const isEmpty = s.lastScrapeStatus === 'empty';
-    const dotClass = isError ? 'error' : (s.lastScrapeStatus === 'ok' ? 'ok' : 'pending');
+    
+    let dotClass = 'pending';
+    let icon = '';
+    let tooltip = '';
+    
+    if (isError) {
+      dotClass = 'error';
+      icon = '<span title="Error: ' + escapeHtml(s.lastScrapeError || '') + '">❌</span>';
+    } else if (isBlocked) {
+      dotClass = 'warning';
+      icon = '<span title="LinkedIn requires login to scrape. Try adding specific job search URLs instead.">⚠️</span>';
+    } else if (isEmpty) {
+      dotClass = 'empty';
+      icon = '<span title="Page loaded but no jobs found. The company may not be actively hiring.">⚪</span>';
+    } else if (s.lastScrapeStatus === 'ok') {
+      dotClass = 'ok';
+    }
+
     const lastTime = s.lastScrapedAt ? timeAgo(s.lastScrapedAt) : 'pending';
+    const isLinkedInProblem = s.platform === 'linkedin' && (isBlocked || isEmpty);
 
     html += `
-      <div class="watched-row ${isError ? 'error' : ''}">
-        <div class="favicon-avatar"><img src="https://www.google.com/s2/favicons?domain=${escapeHtml(s.url)}&sz=16" onerror="this.style.display='none'"></div>
-        <div class="watched-info">
-          <div class="watched-domain" title="${escapeHtml(s.url)}">${escapeHtml(s.label)}</div>
-          <div class="watched-meta">
-            <span class="scrape-dot ${dotClass}"></span>
-            <span>${lastTime}</span>
-            ${isEmpty ? '<span style="color:var(--amber);">· no results</span>' : ''}
+      <div class="watched-row-wrap" style="display:flex; flex-direction:column; gap:8px;">
+        <div class="watched-row ${isError ? 'error' : ''}">
+          <div class="favicon-avatar"><img src="https://www.google.com/s2/favicons?domain=${escapeHtml(s.url)}&sz=16" onerror="this.style.display='none'"></div>
+          <div class="watched-info">
+            <div class="watched-domain" title="${escapeHtml(s.url)}">${escapeHtml(s.label)}</div>
+            <div class="watched-meta">
+              ${icon ? icon : `<span class="scrape-dot ${dotClass}"></span>`}
+              <span>${lastTime}</span>
+              ${isEmpty ? '<span style="color:var(--amber);">· no results</span>' : ''}
+            </div>
           </div>
+          ${s.newJobCount > 0 ? `<span class="new-badge">${s.newJobCount} new</span>` : ''}
+          <button class="btn-trash" data-id="${s.id}" title="Remove">🗑</button>
         </div>
-        ${s.newJobCount > 0 ? `<span class="new-badge">${s.newJobCount} new</span>` : ''}
-        <button class="btn-trash" data-id="${s.id}" title="Remove">🗑</button>
+        ${isLinkedInProblem ? `
+          <div class="linkedin-fallback-card" style="background:#fff; border:2px solid #000; padding:10px; box-shadow:3px 3px 0 #000; font-size:11px; font-weight:700;">
+            <div style="font-family:var(--display); font-size:12px; color:var(--red); font-weight:800;">⚠ LinkedIn limited access</div>
+            <div style="margin-top:4px;">LinkedIn restricts automated access without login. Try these more reliable alternatives:</div>
+            <ul style="margin:4px 0 8px 16px; font-weight:500;">
+              <li>Add a specific job search URL instead</li>
+              <li>Track the company's direct careers page</li>
+            </ul>
+            <div style="display:flex; gap:8px;">
+              <button class="btn-try-search" data-id="${s.id}" data-url="${escapeHtml(s.url)}" style="background:var(--cyan); color:#fff; border:2px solid #000; padding:4px 8px; font-weight:800; cursor:pointer; flex:1;">Try search URL</button>
+            </div>
+          </div>
+        ` : ''}
       </div>
     `;
   }
   html += '</div>';
+  
+  // Search builder modal HTML
+  html += `
+    <div id="search-builder-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9999; padding:20px; align-items:center; justify-content:center;">
+      <div style="background:var(--surface); border:3px solid #000; box-shadow:5px 5px 0 #000; width:100%; max-width:320px; padding:16px;">
+        <div style="font-family:var(--display); font-size:14px; font-weight:800; margin-bottom:12px; text-transform:uppercase;">Build LinkedIn Search</div>
+        <input type="text" id="sb-keywords" placeholder="Keywords (e.g. Security Engineer)" style="width:100%; border:2px solid #000; padding:8px; margin-bottom:8px; font-family:var(--mono); font-size:12px; font-weight:700;" />
+        <input type="text" id="sb-location" placeholder="Location (e.g. India)" style="width:100%; border:2px solid #000; padding:8px; margin-bottom:12px; font-family:var(--mono); font-size:12px; font-weight:700;" />
+        <div style="font-size:10px; margin-bottom:4px; font-weight:800;">Generated URL:</div>
+        <div id="sb-preview" style="background:#f0f0f0; border:1px solid #000; padding:6px; font-size:9px; word-break:break-all; margin-bottom:12px; min-height:30px;"></div>
+        <div style="display:flex; gap:8px;">
+          <button id="sb-cancel" style="background:#fff; border:2px solid #000; padding:6px; font-weight:800; cursor:pointer; flex:1;">Cancel</button>
+          <button id="sb-add" style="background:var(--green); color:#000; border:2px solid #000; padding:6px; font-weight:800; cursor:pointer; flex:2;">Add URL</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
   container.innerHTML = html;
 
   container.querySelectorAll('.btn-trash').forEach(btn => {
@@ -324,6 +376,39 @@ function loadWatchedPages() {
       const id = (btn as HTMLElement).dataset.id!;
       browser.runtime.sendMessage({ type: 'DELETE_TRACKED_SEARCH', id });
     });
+  });
+
+  const modal = $('search-builder-modal');
+  const kwInput = $('sb-keywords') as HTMLInputElement;
+  const locInput = $('sb-location') as HTMLInputElement;
+  const preview = $('sb-preview');
+  let currentTargetId = '';
+  
+  function updatePreview() {
+    const kw = encodeURIComponent(kwInput.value.trim());
+    const loc = encodeURIComponent(locInput.value.trim());
+    const url = \`https://www.linkedin.com/jobs/search?keywords=\${kw}&location=\${loc}&f_TPR=r86400\`;
+    preview.textContent = url;
+  }
+  
+  container.querySelectorAll('.btn-try-search').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentTargetId = (btn as HTMLElement).dataset.id!;
+      modal.style.display = 'flex';
+      kwInput.value = ''; locInput.value = ''; updatePreview();
+    });
+  });
+  
+  kwInput?.addEventListener('input', updatePreview);
+  locInput?.addEventListener('input', updatePreview);
+  
+  $('sb-cancel')?.addEventListener('click', () => { modal.style.display = 'none'; });
+  $('sb-add')?.addEventListener('click', () => {
+    browser.runtime.sendMessage({ type: 'ADD_TRACKED_SEARCH', url: preview.textContent });
+    if (currentTargetId) {
+      browser.runtime.sendMessage({ type: 'DELETE_TRACKED_SEARCH', id: currentTargetId });
+    }
+    modal.style.display = 'none';
   });
 }
 

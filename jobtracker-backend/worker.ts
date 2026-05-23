@@ -2,7 +2,7 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 import { Worker, Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { PrismaClient } from '@prisma/client';
-import { scrapeJobs } from './scraper.js';
+import { scrapeJobsWithResult, ScraperResult } from './scraper.js';
 import { Resend } from 'resend';
 import { chromium } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
@@ -48,6 +48,33 @@ console.log('[Worker] Connected to Redis. Initializing worker...');
 // ────────────────────────────────────────────────────────
 // MAIN SCRAPE WORKER
 // ────────────────────────────────────────────────────────
+
+async function scrapeWithRetry(url: string, maxRetries = 2): Promise<ScraperResult> {
+  let lastResult: ScraperResult | null = null;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = 30000 * Math.pow(2, attempt - 1);
+      console.log(`[worker] Retry ${attempt}/${maxRetries} for ${url} in ${delay/1000}s`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+    
+    const result = await scrapeJobsWithResult(url);
+    lastResult = result;
+    
+    if (result.status === 'ok' || result.status === 'empty') break;
+    
+    if (result.status === 'blocked') {
+      console.warn(`[worker] ${url} is blocked (${result.blockedReason}). Backing off.`);
+      break;
+    }
+    
+    console.warn(`[worker] Attempt ${attempt} failed for ${url}: ${result.errorMessage}`);
+  }
+  
+  return lastResult!;
+}
+
 const worker = new Worker('monitorQueue', async (job) => {
   // Route to the right handler
   if (job.name === 'resume-tailoring') {
@@ -74,51 +101,43 @@ const worker = new Worker('monitorQueue', async (job) => {
       experienceLevel: userProfile?.experienceLevel ?? undefined,
     };
 
-    // Scrape the page
-    let scrapedJobs: any[];
-    try {
-      scrapedJobs = await scrapeJobs(url);
-    } catch (scrapeErr: any) {
-      console.error(`[Worker] Scrape error for ${url}:`, scrapeErr.message);
-      await prisma.trackedSearch.update({
-        where: { id: searchId },
-        data: {
-          lastScrapedAt: new Date(),
-          lastScrapeStatus: 'error',
-          lastScrapeError: scrapeErr.message?.slice(0, 500) || 'Unknown scrape error',
-        },
-      });
+    // Scrape the page with retries
+    const result = await scrapeWithRetry(url);
+
+    // Update DB with scrape result regardless of outcome
+    await prisma.trackedSearch.update({
+      where: { id: searchId },
+      data: {
+        lastScrapedAt: new Date(),
+        lastScrapeStatus: result.status,
+        lastScrapeError: result.errorMessage || result.blockedReason || null,
+      }
+    });
+
+    // Only process jobs if we got something useful
+    if (result.status !== 'ok' && result.status !== 'partial') {
+      console.log(`[Worker] Skipping job processing for ${url}: ${result.status}`);
       return;
     }
 
-    if (scrapedJobs.length === 0) {
-      console.log(`[Worker] 0 jobs scraped from ${url}.`);
-      await prisma.trackedSearch.update({
-        where: { id: searchId },
-        data: {
-          lastScrapedAt: new Date(),
-          lastScrapeStatus: 'empty',
-          lastScrapeError: null,
-        },
-      });
-      return;
-    }
+    const scrapedJobs = result.jobs;
 
     // Determine new jobs
     const existingSnapshots = await prisma.jobSnapshot.findMany({
       where: { trackedSearchId: searchId },
     });
     const existingIds = new Set(existingSnapshots.map(s => s.atsJobId));
-    const newJobs = scrapedJobs.filter(j => !existingIds.has(j.id));
+    const newJobs = scrapedJobs.filter(j => !existingIds.has(j.atsJobId));
 
     console.log(`[Worker] Scraped ${scrapedJobs.length}, existing ${existingIds.size}, new ${newJobs.length}`);
+
 
     const companyFromUrl = extractCompanyFromUrl(url);
     let matchedCount = 0;
 
     for (const job of newJobs) {
       try {
-        const companyName = job.company || companyFromUrl || 'Unknown';
+        const companyName = job.companyName || companyFromUrl || 'Unknown';
 
         // Run keyword matching
         const match = jobMatchesPrefs(
@@ -129,7 +148,7 @@ const worker = new Worker('monitorQueue', async (job) => {
         const savedJob = await prisma.jobSnapshot.create({
           data: {
             trackedSearchId: searchId,
-            atsJobId: job.id,
+            atsJobId: job.atsJobId,
             title: job.title,
             location: job.location,
             url: job.url,
@@ -170,7 +189,7 @@ const worker = new Worker('monitorQueue', async (job) => {
           console.log(`[Worker] ⏭️  No match: "${job.title}"`);
         }
       } catch (innerErr: any) {
-        console.error(`[Worker] Error processing job ${job.id}:`, innerErr.message);
+        console.error(`[Worker] Error processing job ${job.atsJobId}:`, innerErr.message);
       }
     }
 
@@ -192,7 +211,7 @@ const worker = new Worker('monitorQueue', async (job) => {
     console.log(`[Worker] Done. ${matchedCount} matched, ${newJobCount} total unseen.`);
 
   } catch (error: any) {
-    console.error(`[Worker] Fatal error for job ${job.id}:`, error);
+    console.error(`[Worker] Fatal error for job ${job.name}:`, error);
     throw error;
   }
 }, { connection });

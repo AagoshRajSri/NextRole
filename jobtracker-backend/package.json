@@ -10,7 +10,10 @@
     "start": "node dist/server.js",
     "worker": "tsx watch worker.ts",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma db push"
+    "prisma:migrate": "prisma db push",
+    "test:scraper": "tsx test-scraper.ts",
+    "test:scraper:all": "tsx test-scraper-batch.ts",
+    "scraper:health": "tsx -e \"import('./scraper').then(s => s.scrapeJobsWithResult(process.argv[2]).then(r => console.log(JSON.stringify(r, null, 2))))\" --"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1049.0",

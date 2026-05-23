@@ -26,10 +26,11 @@ export interface TrackedPage {
   subtitle: string;
   addedAt: number;
   lastScrapedAt: number | null;
-  lastScrapeStatus: 'ok' | 'empty' | 'error' | 'pending' | null;
+  lastScrapeStatus: 'ok' | 'empty' | 'error' | 'pending' | 'blocked' | 'partial' | null;
   lastScrapeError: string | null;
   newJobCount: number;
   isPending: boolean;
+  platform?: string;
 }
 
 export interface StoredJob {

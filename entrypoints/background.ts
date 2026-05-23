@@ -159,9 +159,43 @@ export default defineBackground(() => {
       return;
     }
 
-    console.log('[BG] Polling /api/new-jobs...');
+    console.log('[BG] Polling /api/new-jobs and syncing tracked pages...');
 
     try {
+      // 1) Sync tracked pages to get latest scrape health
+      try {
+        const pagesRes = await fetchApi('/api/tracked-searches');
+        if (pagesRes.ok) {
+          const backendPages: any[] = await pagesRes.json();
+          const currentPages = await trackedPagesStorage.getValue() ?? [];
+          
+          const mergedPages = backendPages.map(bp => {
+            const existing = currentPages.find(p => p.id === bp.id || p.normalizedUrl === normalizeCareerUrl(bp.url));
+            return {
+              id: bp.id,
+              url: bp.url,
+              normalizedUrl: normalizeCareerUrl(bp.url),
+              label: existing?.label || extractReadableLabel(bp.url).title,
+              subtitle: existing?.subtitle || extractReadableLabel(bp.url).subtitle,
+              addedAt: existing?.addedAt || new Date(bp.createdAt).getTime(),
+              lastScrapedAt: bp.lastScrapedAt ? new Date(bp.lastScrapedAt).getTime() : null,
+              lastScrapeStatus: bp.lastScrapeStatus || 'pending',
+              lastScrapeError: bp.lastScrapeError || null,
+              newJobCount: bp.newJobCount || 0,
+              isPending: false,
+              platform: bp.platform || 'generic',
+            } as TrackedPage;
+          });
+          
+          // Keep any optimistic pending pages that aren't on backend yet
+          const pendingPages = currentPages.filter(p => p.isPending);
+          await trackedPagesStorage.setValue([...mergedPages, ...pendingPages]);
+        }
+      } catch (err) {
+        console.error('[BG] Tracked pages sync error:', err);
+      }
+
+      // 2) Poll new jobs
       const res = await fetchApi('/api/new-jobs');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const newJobs: any[] = await res.json();
@@ -490,6 +524,10 @@ export default defineBackground(() => {
           );
           await trackedPagesStorage.setValue(finalPages);
           sendResponse({ ok: true, data });
+
+          // Poll shortly after adding to catch the immediate scrape results and show web notifications ASAP
+          setTimeout(() => pollNewJobs(), 6000);
+          setTimeout(() => pollNewJobs(), 15000);
         } catch (err: any) {
           // Rollback on failure
           const currentPages = await trackedPagesStorage.getValue() ?? [];

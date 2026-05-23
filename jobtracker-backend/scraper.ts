@@ -1,317 +1,232 @@
-import { chromium } from 'playwright-extra';
-import stealth from 'puppeteer-extra-plugin-stealth';
-
-chromium.use(stealth());
+import { Page } from 'playwright';
+import { BrowserFactory, BrowserOptions } from './lib/browserFactory.js';
 
 export interface ScrapedJob {
-  id: string;
+  atsJobId: string;
   title: string;
   location: string;
   url: string;
-  company?: string;
+  companyName?: string;
 }
 
-// Rotating user agents for anti-bot evasion
-const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-];
-
-function randomUA(): string {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+export interface ScraperResult {
+  jobs: ScrapedJob[];
+  status: 'ok' | 'blocked' | 'empty' | 'error' | 'partial';
+  jobsCount: number;
+  scrapeDurationMs: number;
+  platform: string;
+  blockedReason?: string;     // why it was blocked if status === 'blocked'
+  errorMessage?: string;      // error details if status === 'error'
+  pageTitle?: string;         // useful for debugging wrong-URL issues
+  screenshotBase64?: string;  // only if debug mode enabled
 }
 
-function jitter(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min)) + min;
+// Legacy compat wrapper (returns just the jobs array, logs errors):
+export async function scrapeJobs(url: string): Promise<ScrapedJob[]> {
+  const result = await scrapeJobsWithResult(url);
+  if (result.status === 'error') console.error(`[scraper] ${result.errorMessage}`);
+  if (result.status === 'blocked') console.warn(`[scraper] Blocked on ${result.platform}: ${result.blockedReason}`);
+  return result.jobs;
 }
 
-export async function scrapeJobs(targetUrl: string): Promise<ScrapedJob[]> {
-  console.log(`[Scraper] Launching Playwright: ${targetUrl}`);
+function detectPlatform(url: string): string {
+  const u = new URL(url);
+  const host = u.hostname.toLowerCase();
+  
+  if (host.includes('greenhouse.io')) return 'greenhouse';
+  if (host.includes('lever.co')) return 'lever';
+  if (host.includes('myworkdayjobs.com') || host.includes('workday.com')) return 'workday';
+  if (host.includes('linkedin.com')) return 'linkedin';
+  if (host === 'amazon.jobs') return 'amazon_jobs';
+  if (host.includes('ashbyhq.com')) return 'ashby';
+  if (host.includes('wellfound.com') || host.includes('angel.co')) return 'wellfound';
+  if (host.includes('naukri.com')) return 'naukri';
+  if (host.includes('smartrecruiters.com')) return 'smartrecruiters';
+  if (host.includes('workable.com')) return 'workable';
+  return 'generic';
+}
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  });
-
-  try {
-    const context = await browser.newContext({ userAgent: randomUA() });
-    const page = await context.newPage();
-
-    await page.waitForTimeout(jitter(300, 800));
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(jitter(500, 1500));
-
-    const url = targetUrl.toLowerCase();
-    let jobs: ScrapedJob[] = [];
-
-    if (url.includes('boards.greenhouse.io') || url.includes('greenhouse.io')) {
-      jobs = await parseGreenhouse(page);
-    } else if (url.includes('jobs.lever.co') || url.includes('lever.co')) {
-      jobs = await parseLever(page);
-    } else if (url.includes('myworkdayjobs.com') || url.includes('workday.com')) {
-      jobs = await parseWorkday(page);
-    } else if (url.includes('linkedin.com')) {
-      jobs = await parseLinkedIn(page);
-    } else if (url.includes('amazon.jobs')) {
-      jobs = await parseAmazon(page);
-    } else if (url.includes('naukri.com')) {
-      jobs = await parseNaukri(page);
-    } else {
-      // Auto-detect by DOM structure, then generic fallback
-      console.log('[Scraper] Unknown platform, auto-detecting...');
-      const ghCount = await page.locator('.opening').count();
-      const lvCount = await page.locator('.posting').count();
-
-      if (ghCount > 0) {
-        jobs = await parseGreenhouse(page);
-      } else if (lvCount > 0) {
-        jobs = await parseLever(page);
-      } else {
-        jobs = await parseGeneric(page);
-      }
-    }
-
-    console.log(`[Scraper] Scraped ${jobs.length} jobs from ${targetUrl}`);
-    return jobs;
-  } catch (err) {
-    console.error(`[Scraper] Error scraping ${targetUrl}:`, err);
-    throw err;
-  } finally {
-    await browser.close();
+export async function scrapeJobsWithResult(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const platform = detectPlatform(url);
+  
+  switch (platform) {
+    case 'greenhouse': return scrapeGreenhouse(url, options);
+    case 'lever':      return scrapeLever(url, options);
+    case 'workday':    return scrapeWorkday(url, options);
+    case 'linkedin':   return scrapeLinkedIn(url, options);
+    case 'amazon_jobs': return scrapeAmazonJobs(url, options);
+    case 'ashby':      return scrapeAshby(url, options);
+    case 'naukri':     return scrapeNaukri(url, options);
+    default:           return scrapeGeneric(url, options);
   }
+}
+
+function detectBlock(page: Page, html: string, platform: string): string | null {
+  const lc = html.toLowerCase();
+  
+  // Generic block signals
+  if (lc.includes('access denied')) return 'access denied page';
+  if (lc.includes('captcha') && lc.includes('solve')) return 'captcha challenge';
+  if (lc.includes('are you a robot') || lc.includes('are you human')) return 'bot challenge';
+  if (lc.includes('429') || lc.includes('too many requests')) return 'rate limited (429)';
+  if (lc.includes('cf-error') || lc.includes('cloudflare') && lc.includes('error')) return 'Cloudflare block';
+  if (lc.includes('blocked') && lc.includes('automated')) return 'automation detected';
+  
+  // LinkedIn-specific
+  if (platform === 'linkedin') {
+    if (lc.includes('authwall') || lc.includes('login') && lc.includes('sign in to view')) return 'LinkedIn auth wall';
+    if (lc.includes('join now') && lc.includes('sign in') && !lc.includes('job-search-card')) return 'LinkedIn login gate';
+    if (page.url().includes('linkedin.com/uas/login') || page.url().includes('linkedin.com/checkpoint')) return 'redirected to LinkedIn login';
+  }
+  
+  return null;
 }
 
 // ════════════════════════════════════════════════════════
 // GREENHOUSE
 // ════════════════════════════════════════════════════════
-async function parseGreenhouse(page: any): Promise<ScrapedJob[]> {
+async function scrapeGreenhouse(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now();
+  const { page, cleanup } = await BrowserFactory.getPage(options);
   try {
-    await page.waitForSelector('.opening', { timeout: 10000 });
-  } catch {
-    console.log('[Scraper] No .opening elements found (Greenhouse).');
-    return [];
-  }
-
-  return page.evaluate(() => {
-    const results: any[] = [];
-    document.querySelectorAll('.opening').forEach((el: any) => {
-      const link = el.querySelector('a');
-      const loc = el.querySelector('.location');
-      if (link) {
-        const href = link.getAttribute('href') || '';
-        const title = link.innerText.trim();
-        const location = loc ? loc.innerText.trim() : 'Remote / Unspecified';
-        const absUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
-        const match = absUrl.match(/\/jobs\/(\d+)/);
-        const id = match ? match[1] : absUrl.split('/').pop() || String(Math.random());
-        results.push({ id, title, location, url: absUrl });
-      }
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    const html = await page.content();
+    const blocked = detectBlock(page, html, 'greenhouse');
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'greenhouse', blockedReason: blocked, scrapeDurationMs: Date.now() - start };
+    }
+    
+    await page.waitForSelector('.opening', { timeout: 10000 }).catch(() => null);
+    
+    const jobs = await page.evaluate(() => {
+      const results: ScrapedJob[] = [];
+      document.querySelectorAll('.opening').forEach((el: any) => {
+        const link = el.querySelector('a');
+        const loc = el.querySelector('.location');
+        if (link) {
+          const href = link.getAttribute('href') || '';
+          const title = link.innerText.trim();
+          const location = loc ? loc.innerText.trim() : 'Remote / Unspecified';
+          const absUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
+          const match = absUrl.match(/\/jobs\/(\d+)/);
+          const atsJobId = match ? match[1] : absUrl.split('/').pop() || String(Math.random());
+          results.push({ atsJobId, title, location, url: absUrl, companyName: '' });
+        }
+      });
+      return results;
     });
-    return results;
-  });
+
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length, platform: 'greenhouse', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() };
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'greenhouse', errorMessage: err.message, scrapeDurationMs: Date.now() - start };
+  } finally {
+    await cleanup();
+  }
 }
 
 // ════════════════════════════════════════════════════════
 // LEVER
 // ════════════════════════════════════════════════════════
-async function parseLever(page: any): Promise<ScrapedJob[]> {
+async function scrapeLever(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now();
+  const { page, cleanup } = await BrowserFactory.getPage(options);
   try {
-    await page.waitForSelector('.posting', { timeout: 10000 });
-  } catch {
-    console.log('[Scraper] No .posting elements found (Lever).');
-    return [];
-  }
-
-  return page.evaluate(() => {
-    const results: any[] = [];
-    document.querySelectorAll('.posting').forEach((el: any) => {
-      const link = el.querySelector('a.posting-title') || el.querySelector('a');
-      const titleEl = el.querySelector('h5') || el.querySelector('.posting-title');
-      const locEl = el.querySelector('.sort-by-location') || el.querySelector('.posting-category');
-      if (link) {
-        const url = link.getAttribute('href') || '';
-        const title = titleEl ? titleEl.innerText.trim() : link.innerText.trim();
-        const location = locEl ? locEl.innerText.trim() : 'Remote / Unspecified';
-        const parts = url.split('/');
-        const id = parts.pop() || parts.pop() || String(Math.random());
-        results.push({ id, title, location, url });
-      }
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    const html = await page.content();
+    const blocked = detectBlock(page, html, 'lever');
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'lever', blockedReason: blocked, scrapeDurationMs: Date.now() - start };
+    }
+    
+    await page.waitForSelector('.posting', { timeout: 10000 }).catch(() => null);
+    
+    const jobs = await page.evaluate(() => {
+      const results: ScrapedJob[] = [];
+      document.querySelectorAll('.posting').forEach((el: any) => {
+        const link = el.querySelector('a.posting-title') || el.querySelector('a');
+        const titleEl = el.querySelector('h5') || el.querySelector('.posting-title');
+        const locEl = el.querySelector('.sort-by-location') || el.querySelector('.posting-category');
+        if (link) {
+          const linkUrl = link.getAttribute('href') || '';
+          const title = titleEl ? titleEl.innerText.trim() : link.innerText.trim();
+          const location = locEl ? locEl.innerText.trim() : 'Remote / Unspecified';
+          const parts = linkUrl.split('/');
+          const atsJobId = parts.pop() || parts.pop() || String(Math.random());
+          results.push({ atsJobId, title, location, url: linkUrl, companyName: '' });
+        }
+      });
+      return results;
     });
-    return results;
-  });
+
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length, platform: 'lever', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() };
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'lever', errorMessage: err.message, scrapeDurationMs: Date.now() - start };
+  } finally {
+    await cleanup();
+  }
 }
 
 // ════════════════════════════════════════════════════════
 // WORKDAY
 // ════════════════════════════════════════════════════════
-async function parseWorkday(page: any): Promise<ScrapedJob[]> {
+async function scrapeWorkday(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now();
+  const { page, cleanup } = await BrowserFactory.getPage(options);
   try {
-    await page.waitForSelector('[data-automation-id="jobPostingTitle"]', { timeout: 15000 });
-  } catch {
-    console.log('[Scraper] No Workday job titles found.');
-    return [];
-  }
+    await page.goto(url, { waitUntil: 'networkidle' });
+    const html = await page.content();
+    const blocked = detectBlock(page, html, 'workday');
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'workday', blockedReason: blocked, scrapeDurationMs: Date.now() - start };
+    }
+    
+    await page.waitForSelector('[data-automation-id="jobPostingTitle"]', { timeout: 15000 }).catch(() => null);
+    
+    const jobs = await page.evaluate(() => {
+      const results: ScrapedJob[] = [];
+      document.querySelectorAll('[data-automation-id="jobPostingTitle"]').forEach((el: any) => {
+        const link = el.closest('a') || el.querySelector('a') || el;
+        const card = el.closest('li') || el.closest('[role="listitem"]') || el.parentElement?.parentElement;
+        const title = el.innerText.trim();
+        const href = link.getAttribute('href') || '';
+        const absUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
 
-  return page.evaluate(() => {
-    const results: any[] = [];
-    document.querySelectorAll('[data-automation-id="jobPostingTitle"]').forEach((el: any) => {
-      const link = el.closest('a') || el.querySelector('a') || el;
-      const card = el.closest('li') || el.closest('[role="listitem"]') || el.parentElement?.parentElement;
-      const title = el.innerText.trim();
-      const href = link.getAttribute('href') || '';
-      const absUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
+        let location = 'Remote / Unspecified';
+        if (card) {
+          const locEl = card.querySelector('[data-automation-id="locations"]') || card.querySelector('[data-automation-id="subtitle"]');
+          if (locEl) location = locEl.innerText.trim();
+        }
 
-      let location = 'Remote / Unspecified';
-      if (card) {
-        const locEl = card.querySelector('[data-automation-id="locations"]') || card.querySelector('[data-automation-id="subtitle"]');
-        if (locEl) location = locEl.innerText.trim();
-      }
-
-      const parts = absUrl.split('/');
-      const last = parts.pop() || '';
-      const id = last.includes('_') ? last.split('_').pop() || last : last || String(Math.random());
-      results.push({ id, title, location, url: absUrl });
+        const parts = absUrl.split('/');
+        const last = parts.pop() || '';
+        const atsJobId = last.includes('_') ? last.split('_').pop() || last : last || String(Math.random());
+        results.push({ atsJobId, title, location, url: absUrl, companyName: '' });
+      });
+      return results;
     });
-    return results;
-  });
-}
 
-// ════════════════════════════════════════════════════════
-// LINKEDIN (public, no login)
-// ════════════════════════════════════════════════════════
-async function parseLinkedIn(page: any): Promise<ScrapedJob[]> {
-  // LinkedIn public company jobs page shows limited results without login
-  try {
-    await page.waitForTimeout(jitter(2000, 4000)); // Extra wait — LinkedIn is slow
-    // Try multiple selectors — LinkedIn changes DOM frequently
-    const selectors = [
-      '.jobs-search__results-list .job-search-card',
-      '.base-card',
-      '[data-entity-urn]',
-      '.job-result-card',
-    ];
-
-    let foundSelector = '';
-    for (const sel of selectors) {
-      const count = await page.locator(sel).count();
-      if (count > 0) {
-        foundSelector = sel;
-        break;
-      }
-    }
-
-    if (!foundSelector) {
-      console.log('[Scraper] LinkedIn: no job cards found (may require login).');
-      return [];
-    }
-
-    return page.evaluate((selector: string) => {
-      const results: any[] = [];
-      document.querySelectorAll(selector).forEach((card: any) => {
-        const titleEl = card.querySelector('.job-search-card__title') ||
-          card.querySelector('.base-search-card__title') ||
-          card.querySelector('h3') ||
-          card.querySelector('[class*="title"]');
-        const compEl = card.querySelector('.job-search-card__subtitle') ||
-          card.querySelector('.base-search-card__subtitle') ||
-          card.querySelector('h4');
-        const locEl = card.querySelector('.job-search-card__location') ||
-          card.querySelector('.job-result-card__location') ||
-          card.querySelector('[class*="location"]');
-        const linkEl = card.querySelector('a[href*="/jobs/view/"]') ||
-          card.querySelector('a');
-
-        if (titleEl && linkEl) {
-          const title = titleEl.innerText.trim();
-          const company = compEl ? compEl.innerText.trim() : '';
-          const location = locEl ? locEl.innerText.trim() : 'Remote / Unspecified';
-          const href = linkEl.getAttribute('href') || '';
-          const absUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
-
-          // Extract LinkedIn job ID from URL: /jobs/view/1234567890/
-          const idMatch = absUrl.match(/\/jobs\/view\/(\d+)/);
-          const id = idMatch ? idMatch[1] : `li-${results.length}-${Date.now()}`;
-
-          results.push({ id, title, location, url: absUrl, company });
-        }
-      });
-      return results;
-    }, foundSelector);
-  } catch (err) {
-    console.error('[Scraper] LinkedIn parse error:', err);
-    return [];
-  }
-}
-
-// ════════════════════════════════════════════════════════
-// AMAZON.JOBS
-// ════════════════════════════════════════════════════════
-async function parseAmazon(page: any): Promise<ScrapedJob[]> {
-  try {
-    await page.waitForTimeout(jitter(1000, 2500));
-
-    const selectors = [
-      '.job-tile',
-      '[data-job-id]',
-      '.job-card',
-      '.result-card',
-    ];
-
-    let foundSelector = '';
-    for (const sel of selectors) {
-      const count = await page.locator(sel).count();
-      if (count > 0) {
-        foundSelector = sel;
-        break;
-      }
-    }
-
-    if (!foundSelector) {
-      console.log('[Scraper] Amazon.jobs: no job cards found.');
-      return [];
-    }
-
-    return page.evaluate((selector: string) => {
-      const results: any[] = [];
-      document.querySelectorAll(selector).forEach((card: any, idx: number) => {
-        const titleEl = card.querySelector('.job-title') ||
-          card.querySelector('h3') ||
-          card.querySelector('[class*="title"]');
-        const locEl = card.querySelector('.location-and-id') ||
-          card.querySelector('.job-location') ||
-          card.querySelector('[class*="location"]');
-        const linkEl = card.querySelector('a');
-        const jobId = card.getAttribute('data-job-id');
-
-        if (titleEl) {
-          const title = titleEl.innerText.trim();
-          const location = locEl ? locEl.innerText.trim() : 'Unspecified';
-          let url = '';
-          if (linkEl) {
-            const href = linkEl.getAttribute('href') || '';
-            url = href.startsWith('http') ? href : new URL(href, window.location.href).href;
-          }
-          const id = jobId || `amz-${idx}-${Date.now()}`;
-          results.push({ id, title, location, url: url || window.location.href, company: 'Amazon' });
-        }
-      });
-      return results;
-    }, foundSelector);
-  } catch (err) {
-    console.error('[Scraper] Amazon parse error:', err);
-    return [];
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length, platform: 'workday', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() };
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'workday', errorMessage: err.message, scrapeDurationMs: Date.now() - start };
+  } finally {
+    await cleanup();
   }
 }
 
 // ════════════════════════════════════════════════════════
 // NAUKRI
 // ════════════════════════════════════════════════════════
-async function parseNaukri(page: any): Promise<ScrapedJob[]> {
+async function scrapeNaukri(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now();
+  const { page, cleanup } = await BrowserFactory.getPage(options);
   try {
-    await page.waitForTimeout(jitter(1000, 2000));
-
+    await page.goto(url, { waitUntil: 'networkidle' });
+    const html = await page.content();
+    const blocked = detectBlock(page, html, 'naukri');
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'naukri', blockedReason: blocked, scrapeDurationMs: Date.now() - start };
+    }
+    
     const selectors = [
       '.jobTuple',
       'article[data-job-id]',
@@ -329,12 +244,11 @@ async function parseNaukri(page: any): Promise<ScrapedJob[]> {
     }
 
     if (!foundSelector) {
-      console.log('[Scraper] Naukri: no job tuples found.');
-      return [];
+      return { jobs: [], status: 'empty', jobsCount: 0, platform: 'naukri', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() };
     }
 
-    return page.evaluate((selector: string) => {
-      const results: any[] = [];
+    const jobs = await page.evaluate((selector: string) => {
+      const results: ScrapedJob[] = [];
       document.querySelectorAll(selector).forEach((card: any, idx: number) => {
         const titleEl = card.querySelector('.title') ||
           card.querySelector('a.title') ||
@@ -350,112 +264,461 @@ async function parseNaukri(page: any): Promise<ScrapedJob[]> {
 
         if (titleEl) {
           const title = titleEl.innerText.trim();
-          const company = compEl ? compEl.innerText.trim() : '';
+          const companyName = compEl ? compEl.innerText.trim() : '';
           const location = locEl ? locEl.innerText.trim() : 'India';
           const linkEl = titleEl.closest('a') || titleEl.querySelector('a') || card.querySelector('a');
-          let url = '';
+          let linkUrl = '';
           if (linkEl) {
             const href = linkEl.getAttribute('href') || '';
-            url = href.startsWith('http') ? href : new URL(href, window.location.href).href;
+            linkUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
           }
-          const id = jobId || `nk-${idx}-${Date.now()}`;
-          results.push({ id, title, location, url: url || window.location.href, company });
+          const atsJobId = jobId || `nk-${idx}-${Date.now()}`;
+          results.push({ atsJobId, title, location, url: linkUrl || window.location.href, companyName });
         }
       });
       return results;
     }, foundSelector);
-  } catch (err) {
-    console.error('[Scraper] Naukri parse error:', err);
-    return [];
+
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length, platform: 'naukri', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() };
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'naukri', errorMessage: err.message, scrapeDurationMs: Date.now() - start };
+  } finally {
+    await cleanup();
   }
 }
 
 // ════════════════════════════════════════════════════════
-// GENERIC FALLBACK (improved)
+// LINKEDIN
 // ════════════════════════════════════════════════════════
-async function parseGeneric(page: any): Promise<ScrapedJob[]> {
-  return page.evaluate(() => {
-    const results: any[] = [];
-    const seen = new Set<string>();
+async function scrapeLinkedIn(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now()
+  const { page, cleanup } = await BrowserFactory.getPage({ stealth: true, ...options })
+  
+  try {
+    // Step 1: Navigate with realistic behavior
+    await page.goto(url, { waitUntil: 'domcontentloaded' })
+    
+    // Human-like: random scroll before waiting for jobs
+    await page.evaluate(() => window.scrollTo({ top: 200, behavior: 'smooth' }))
+    await page.waitForTimeout(800 + Math.random() * 1200)
+    
+    // Step 2: Check for block
+    const html = await page.content()
+    const blocked = detectBlock(page, html, 'linkedin')
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'linkedin',
+               blockedReason: blocked, scrapeDurationMs: Date.now() - start }
+    }
+    
+    // Step 3: Try Strategy A — .job-search-card elements (most common public layout)
+    let jobs = await tryLinkedInStrategyA(page)
+    
+    // Step 4: Try Strategy B — li[data-occludable-job-id] (alternate layout)
+    if (jobs.length === 0) jobs = await tryLinkedInStrategyB(page)
+    
+    // Step 5: Try Strategy C — JSON-LD extraction (most reliable when available)
+    if (jobs.length === 0) jobs = await tryLinkedInStrategyC(page)
+    
+    // Step 6: Infinite scroll — LinkedIn lazy-loads jobs
+    // Only scroll if initial batch found > 0 (otherwise we're probably blocked)
+    if (jobs.length > 0 && jobs.length < 25) {
+      jobs = await scrollAndCollectLinkedIn(page, jobs)
+    }
+    
+    const status = jobs.length === 0 ? 'empty' : 'ok'
+    return { jobs, status, jobsCount: jobs.length, platform: 'linkedin',
+             scrapeDurationMs: Date.now() - start, pageTitle: await page.title() }
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'linkedin',
+             errorMessage: err.message, scrapeDurationMs: Date.now() - start }
+  } finally {
+    await cleanup()
+  }
+}
 
-    // Strategy 1: Look for list items containing links with job-like hrefs
-    const listItems = document.querySelectorAll('li, [role="listitem"], [class*="job"], [class*="card"], [class*="posting"]');
-    listItems.forEach((item: any, idx: number) => {
-      const anchor = item.querySelector('a');
-      if (!anchor) return;
+async function tryLinkedInStrategyA(page: Page): Promise<ScrapedJob[]> {
+  try {
+    await page.waitForSelector('.job-search-card, .jobs-search__results-list li', { timeout: 5000 })
+    return await page.evaluate(() => {
+      const cards = document.querySelectorAll('.job-search-card, .jobs-search__results-list li[data-entity-urn]')
+      return Array.from(cards).map(card => {
+        const titleEl = card.querySelector('.job-search-card__title, .base-search-card__title, h3')
+        const companyEl = card.querySelector('.job-search-card__company-name, .base-search-card__subtitle, h4')
+        const locationEl = card.querySelector('.job-search-card__location, .job-result-card__location, [class*="location"]')
+        const linkEl = card.querySelector('a[href*="/jobs/view/"]')
+        const href = linkEl?.getAttribute('href') || ''
+        
+        const idMatch = href.match(/\/jobs\/view\/(\d+)/)
+        
+        return {
+          atsJobId: idMatch?.[1] || href,
+          title: titleEl?.textContent?.trim() || '',
+          companyName: companyEl?.textContent?.trim() || '',
+          location: locationEl?.textContent?.trim() || '',
+          url: href.startsWith('http') ? href : `https://www.linkedin.com${href.split('?')[0]}`,
+        }
+      }).filter(j => j.title && j.atsJobId)
+    })
+  } catch {
+    return []
+  }
+}
 
-      const href = anchor.getAttribute('href') || '';
-      const isJobLink = /\/(job|jobs|careers|opening|position|apply|posting)/i.test(href);
-      if (!isJobLink) return;
+async function tryLinkedInStrategyB(page: Page): Promise<ScrapedJob[]> {
+  try {
+    await page.waitForSelector('[data-occludable-job-id]', { timeout: 4000 })
+    return await page.evaluate(() => {
+      const items = document.querySelectorAll('[data-occludable-job-id]')
+      return Array.from(items).map(item => {
+        const jobId = item.getAttribute('data-occludable-job-id') || ''
+        const titleEl = item.querySelector('[aria-label]') || item.querySelector('span[title]')
+        const spans = item.querySelectorAll('span')
+        return {
+          atsJobId: jobId,
+          title: titleEl?.getAttribute('aria-label') || titleEl?.textContent?.trim() || '',
+          companyName: spans[1]?.textContent?.trim() || '',
+          location: spans[2]?.textContent?.trim() || '',
+          url: `https://www.linkedin.com/jobs/view/${jobId}/`,
+        }
+      }).filter(j => j.title && j.atsJobId)
+    })
+  } catch {
+    return []
+  }
+}
 
-      // Extract title: first heading or prominent text
-      const titleEl = item.querySelector('h1, h2, h3, h4, h5, [class*="title"]') || anchor;
-      const title = titleEl.innerText.trim();
-      if (title.length < 5 || title.length > 120) return;
-
-      // Extract location
-      let location = 'Unspecified';
-      const locEl = item.querySelector('[class*="location"], [class*="loc"], [class*="city"]');
-      if (locEl) {
-        location = locEl.innerText.trim();
-      } else {
-        // Look for pin emoji or nearby short text
-        const spans = item.querySelectorAll('span, div, p');
-        for (const sp of spans) {
-          const t = (sp as any).innerText.trim();
-          if (t !== title && t.length > 2 && t.length < 50 && !t.includes('\n')) {
-            const hasLocHint = /📍|location|city|remote|office/i.test(t);
-            if (hasLocHint || t.split(',').length <= 3) {
-              location = t;
-              break;
-            }
+async function tryLinkedInStrategyC(page: Page): Promise<ScrapedJob[]> {
+  return await page.evaluate(() => {
+    const scripts = document.querySelectorAll('script[type="application/ld+json"]')
+    const jobs: any[] = []
+    
+    for (const script of scripts) {
+      try {
+        const data = JSON.parse(script.textContent || '')
+        const items = data['@type'] === 'ItemList'
+          ? data.itemListElement?.map((e: any) => e.item) || []
+          : data['@type'] === 'JobPosting' ? [data] : []
+        
+        for (const job of items) {
+          if (job?.['@type'] === 'JobPosting') {
+            const id = job.url?.match(/\/jobs\/view\/(\d+)/)?.[1] || job.identifier?.value || ''
+            jobs.push({
+              atsJobId: String(id),
+              title: job.title || '',
+              companyName: job.hiringOrganization?.name || '',
+              location: job.jobLocation?.address?.addressLocality || job.jobLocation?.name || '',
+              url: job.url || '',
+            })
           }
         }
-      }
-
-      const absUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
-      const dedup = `${title.toLowerCase()}::${absUrl}`;
-      if (seen.has(dedup)) return;
-      seen.add(dedup);
-
-      // Derive ID from URL
-      const urlParts = absUrl.split('/').filter(Boolean);
-      const lastPart = urlParts.pop() || '';
-      const idMatch = lastPart.match(/(\d+)/) || absUrl.match(/[?&]id=(\d+)/);
-      const id = idMatch ? idMatch[1] : `gen-${idx}-${lastPart}`;
-
-      results.push({ id, title, location, url: absUrl });
-    });
-
-    // Strategy 2: Fallback to raw anchor scanning if strategy 1 found too few
-    if (results.length < 3) {
-      document.querySelectorAll('a').forEach((a: any, idx: number) => {
-        const href = a.getAttribute('href') || '';
-        const text = a.innerText.trim();
-        const isJobLink = /\/(job|jobs|career|opening|position|apply)/i.test(href);
-        if (!isJobLink || text.length < 5 || text.length > 80) return;
-
-        const absUrl = href.startsWith('http') ? href : new URL(href, window.location.href).href;
-        const dedup = `${text.toLowerCase()}::${absUrl}`;
-        if (seen.has(dedup)) return;
-        seen.add(dedup);
-
-        let location = 'Unspecified';
-        const parent = a.parentElement;
-        if (parent) {
-          const sibling = parent.innerText.replace(text, '').trim().split('\n')[0]?.trim();
-          if (sibling && sibling.length < 50) location = sibling;
-        }
-
-        results.push({
-          id: `gen-${idx}-${absUrl.split('/').pop()}`,
-          title: text,
-          location,
-          url: absUrl,
-        });
-      });
+      } catch {}
     }
+    return jobs.filter(j => j.title && j.atsJobId)
+  })
+}
 
-    return results;
-  });
+async function scrollAndCollectLinkedIn(page: Page, initialJobs: ScrapedJob[]): Promise<ScrapedJob[]> {
+  const seen = new Set(initialJobs.map(j => j.atsJobId))
+  let allJobs = [...initialJobs]
+  let noNewCount = 0
+  
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate(() => window.scrollBy(0, 800))
+    await page.waitForTimeout(1000 + Math.random() * 500)
+    
+    const currentJobs = await tryLinkedInStrategyA(page)
+      .then(jobs => jobs.length > 0 ? jobs : tryLinkedInStrategyB(page))
+    
+    const newJobs = currentJobs.filter(j => !seen.has(j.atsJobId))
+    if (newJobs.length === 0) {
+      noNewCount++
+      if (noNewCount >= 2) break
+    } else {
+      noNewCount = 0
+      newJobs.forEach(j => seen.add(j.atsJobId))
+      allJobs = [...allJobs, ...newJobs]
+    }
+  }
+  
+  return allJobs
+}
+
+// ════════════════════════════════════════════════════════
+// AMAZON.JOBS
+// ════════════════════════════════════════════════════════
+async function scrapeAmazonJobs(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now()
+  const { page, cleanup } = await BrowserFactory.getPage(options)
+  
+  try {
+    await page.goto(url, { waitUntil: 'networkidle' })
+    
+    await page.waitForSelector('.job-tile, [data-job-id], .JobTile', { timeout: 15000 })
+      .catch(() => null)
+    
+    const html = await page.content()
+    const blocked = detectBlock(page, html, 'amazon_jobs')
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'amazon_jobs',
+               blockedReason: blocked, scrapeDurationMs: Date.now() - start }
+    }
+    
+    const jobs = await page.evaluate(() => {
+      const tiles = document.querySelectorAll('[data-job-id]')
+      if (tiles.length > 0) {
+        return Array.from(tiles).map(tile => {
+          const jobId = tile.getAttribute('data-job-id') || ''
+          const titleEl = tile.querySelector('.job-title, h3, [class*="title"]')
+          const locationEl = tile.querySelector('.location, [class*="location"], [class*="Location"]')
+          const linkEl = tile.querySelector('a') || (tile.tagName === 'A' ? tile : null)
+          const href = linkEl?.getAttribute('href') || `/jobs/${jobId}`
+          return {
+            atsJobId: jobId,
+            title: titleEl?.textContent?.trim() || '',
+            companyName: 'Amazon',
+            location: locationEl?.textContent?.trim() || '',
+            url: href.startsWith('http') ? href : `https://amazon.jobs${href}`,
+          }
+        }).filter(j => j.title && j.atsJobId)
+      }
+      
+      const scripts = document.querySelectorAll('script')
+      for (const s of scripts) {
+        const text = s.textContent || ''
+        if (text.includes('"jobId"') && text.includes('"title"')) {
+          try {
+            const match = text.match(/window\.__INITIAL_STATE__\s*=\s*({.+?});/)
+            if (match) {
+              const state = JSON.parse(match[1])
+              const jobList = state?.jobs?.jobList || state?.search?.results || []
+              return jobList.map((job: any) => ({
+                atsJobId: String(job.jobId || job.id || ''),
+                title: job.title || job.jobTitle || '',
+                companyName: 'Amazon',
+                location: job.location || job.city || '',
+                url: `https://amazon.jobs/jobs/${job.jobId || job.id}`,
+              })).filter((j: any) => j.title)
+            }
+          } catch {}
+        }
+      }
+      return []
+    })
+    
+    if (jobs.length === 0) {
+      const countText = await page.$eval(
+        '.results-count, [class*="resultsCount"], [class*="job-count"]',
+        (el: any) => el.textContent || ''
+      ).catch(() => '')
+      
+      if (countText && /\d+/.test(countText)) {
+        return { jobs: [], status: 'partial', jobsCount: 0, platform: 'amazon_jobs',
+                 errorMessage: `Page shows ${countText} but scraper found 0 — DOM may have changed`,
+                 scrapeDurationMs: Date.now() - start }
+      }
+    }
+    
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length,
+             platform: 'amazon_jobs', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() }
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'amazon_jobs',
+             errorMessage: err.message, scrapeDurationMs: Date.now() - start }
+  } finally {
+    await cleanup()
+  }
+}
+
+// ════════════════════════════════════════════════════════
+// ASHBY
+// ════════════════════════════════════════════════════════
+async function scrapeAshby(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now()
+  const { page, cleanup } = await BrowserFactory.getPage(options)
+  
+  try {
+    await page.goto(url, { waitUntil: 'networkidle' })
+    await page.waitForSelector('[class*="PostingCard"], .ashby-job-posting-list-item', { timeout: 8000 })
+      .catch(() => null)
+    
+    const companySlug = url.match(/jobs\.ashbyhq\.com\/([^/]+)/)?.[1]
+    if (companySlug) {
+      try {
+        const apiResponse = await page.evaluate(async (slug: string) => {
+          const res = await fetch('https://jobs.ashbyhq.com/api/non-user-graphql', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              operationName: 'ApiJobBoardWithTeams',
+              variables: { organizationHostedJobsPageName: slug },
+              query: `query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {
+                jobBoard: jobBoardWithTeams(organizationHostedJobsPageName: $organizationHostedJobsPageName) {
+                  jobPostings { id title locationName employmentType externalLink }
+                }
+              }`
+            })
+          })
+          return res.json()
+        }, companySlug)
+        
+        const postings = apiResponse?.data?.jobBoard?.jobPostings || []
+        if (postings.length > 0) {
+          const jobs = postings.map((p: any) => ({
+            atsJobId: p.id,
+            title: p.title,
+            companyName: companySlug,
+            location: p.locationName || 'Remote',
+            url: p.externalLink || `https://jobs.ashbyhq.com/${companySlug}/${p.id}`,
+          }))
+          return { jobs, status: 'ok', jobsCount: jobs.length, platform: 'ashby',
+                   scrapeDurationMs: Date.now() - start, pageTitle: await page.title() }
+        }
+      } catch {} 
+    }
+    
+    const jobs = await page.evaluate(() => {
+      const cards = document.querySelectorAll('[class*="PostingCard"], .ashby-job-posting-list-item')
+      return Array.from(cards).map(card => {
+        const titleEl = card.querySelector('[class*="title"], h3, h2')
+        const locationEl = card.querySelector('[class*="location"], [class*="Location"]')
+        const linkEl = card.querySelector('a')
+        const href = linkEl?.getAttribute('href') || ''
+        const idMatch = href.match(/\/([a-f0-9-]{36})\/?$/)
+        return {
+          atsJobId: idMatch?.[1] || href,
+          title: titleEl?.textContent?.trim() || '',
+          companyName: '',
+          location: locationEl?.textContent?.trim() || '',
+          url: href.startsWith('http') ? href : `https://jobs.ashbyhq.com${href}`,
+        }
+      }).filter(j => j.title)
+    })
+    
+    return { jobs, status: jobs.length === 0 ? 'empty' : 'ok', jobsCount: jobs.length,
+             platform: 'ashby', scrapeDurationMs: Date.now() - start, pageTitle: await page.title() }
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'ashby',
+             errorMessage: err.message, scrapeDurationMs: Date.now() - start }
+  } finally {
+    await cleanup()
+  }
+}
+
+// ════════════════════════════════════════════════════════
+// GENERIC
+// ════════════════════════════════════════════════════════
+async function scrapeGeneric(url: string, options?: BrowserOptions): Promise<ScraperResult> {
+  const start = Date.now()
+  const { page, cleanup } = await BrowserFactory.getPage(options)
+  
+  try {
+    await page.goto(url, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(2000)
+    
+    const html = await page.content()
+    const blocked = detectBlock(page, html, 'generic')
+    if (blocked) {
+      return { jobs: [], status: 'blocked', jobsCount: 0, platform: 'generic',
+               blockedReason: blocked, scrapeDurationMs: Date.now() - start }
+    }
+    
+    const jobs = await page.evaluate(() => {
+      const results: any[] = []
+      const seen = new Set<string>()
+      
+      document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+        try {
+          const data = JSON.parse(s.textContent || '')
+          const postings = data['@type'] === 'JobPosting' ? [data]
+            : data['@type'] === 'ItemList' ? data.itemListElement?.map((e: any) => e.item) || []
+            : data['@graph']?.filter((g: any) => g['@type'] === 'JobPosting') || []
+          
+          postings.forEach((p: any) => {
+            const id = p.url || p.identifier?.value || p.title
+            if (seen.has(id)) return
+            seen.add(id)
+            results.push({
+              atsJobId: String(p.identifier?.value || p.url?.split('/').pop() || p.title),
+              title: p.title || '',
+              companyName: p.hiringOrganization?.name || '',
+              location: p.jobLocation?.address?.addressLocality || p.jobLocation?.name || '',
+              url: p.url || window.location.href,
+            })
+          })
+        } catch {}
+      })
+      
+      if (results.length > 0) return results
+      
+      const jobLinkPatterns = ['/job/', '/jobs/', '/careers/', '/position/', '/opening/',
+                                '/vacancy/', '/role/', 'job_id=', 'jobId=', 'position_id=']
+      
+      const links = Array.from(document.querySelectorAll('a[href]'))
+        .filter(a => {
+          const href = a.getAttribute('href') || ''
+          return jobLinkPatterns.some(p => href.toLowerCase().includes(p))
+        })
+      
+      links.forEach(link => {
+        const href = link.getAttribute('href') || ''
+        const id = href.split('/').filter(Boolean).pop()?.split('?')[0] || href
+        if (seen.has(id) || !id) return
+        seen.add(id)
+        
+        let title = link.textContent?.trim() || ''
+        
+        if (!title || title.length < 4) {
+          const parent = link.closest('li, article, div[class*="job"], div[class*="position"], div[class*="role"]')
+          if (parent) {
+            const heading = parent.querySelector('h1,h2,h3,h4,strong,[class*="title"],[class*="Title"]')
+            title = heading?.textContent?.trim() || parent.textContent?.slice(0, 80).trim() || ''
+          }
+        }
+        
+        let location = ''
+        const parent = link.closest('li, article, [class*="job"], [class*="position"]')
+        if (parent) {
+          const locEl = parent.querySelector('[class*="location"],[class*="Location"],[class*="city"],[class*="City"],span')
+          location = locEl?.textContent?.trim() || ''
+        }
+        
+        if (title && title.length >= 4) {
+          results.push({
+            atsJobId: id,
+            title: title.slice(0, 120),
+            companyName: '',
+            location: location.slice(0, 80),
+            url: href.startsWith('http') ? href : new URL(href, window.location.href).href,
+          })
+        }
+      })
+      
+      return results
+    })
+    
+    const deduplicated = deduplicateByTitle(jobs)
+    
+    return {
+      jobs: deduplicated,
+      status: deduplicated.length === 0 ? 'empty' : 'ok',
+      jobsCount: deduplicated.length,
+      platform: 'generic',
+      scrapeDurationMs: Date.now() - start,
+      pageTitle: await page.title(),
+    }
+  } catch (err: any) {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'generic',
+             errorMessage: err.message, scrapeDurationMs: Date.now() - start }
+  } finally {
+    await cleanup()
+  }
+}
+
+function deduplicateByTitle(jobs: ScrapedJob[]): ScrapedJob[] {
+  const seen = new Set<string>()
+  return jobs.filter(job => {
+    const normalized = job.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()
+    if (seen.has(normalized)) return false
+    seen.add(normalized)
+    return true
+  })
 }

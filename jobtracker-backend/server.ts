@@ -110,6 +110,48 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
+app.get('/api/scraper-health', async (req, res) => {
+  const userId = getUserId(req);
+  try {
+    const pages = await prisma.trackedSearch.findMany({
+      where: { userId },
+      orderBy: { lastScrapedAt: 'desc' },
+    });
+    
+    const summary = {
+      total: pages.length,
+      healthy: pages.filter(p => p.lastScrapeStatus === 'ok').length,
+      empty: pages.filter(p => p.lastScrapeStatus === 'empty').length,
+      blocked: pages.filter(p => p.lastScrapeStatus === 'blocked').length,
+      erroring: pages.filter(p => p.lastScrapeStatus === 'error').length,
+    };
+    
+    const mappedPages = pages.map(p => {
+      let nextScrapeIn = 'paused';
+      if (p.lastScrapedAt) {
+        // Assume cron runs every 15 mins (900000 ms)
+        const nextTime = new Date(p.lastScrapedAt).getTime() + 15 * 60 * 1000;
+        const diff = Math.max(0, nextTime - Date.now());
+        nextScrapeIn = Math.round(diff / 60000) + ' min';
+      }
+      return {
+        id: p.id,
+        url: p.url,
+        platform: p.platform,
+        lastScrapedAt: p.lastScrapedAt,
+        lastScrapeStatus: p.lastScrapeStatus,
+        lastScrapeError: p.lastScrapeError,
+        newJobCount: p.newJobCount,
+        nextScrapeIn
+      };
+    });
+    
+    res.json({ summary, pages: mappedPages });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ════════════════════════════════════════════════════════
 // TRACKED SEARCHES API
 // ════════════════════════════════════════════════════════
