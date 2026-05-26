@@ -418,6 +418,7 @@
       Feed
       <span class="tab-badge" id="feed-badge" style="display:none;"></span>
     </button>
+    <button class="tab-btn" data-tab="settings" title="Settings">⚙️</button>
   </div>
 
   <!-- Body -->
@@ -434,6 +435,7 @@
         </div>
         <div class="toggle-switch" id="monitor-toggle"></div>
       </div>
+      <button id="scan-open-pages-btn" style="background: var(--cyan); color: #fff; border: 2px solid #000; padding: 8px; width: 100%; font-family: var(--display); font-size: 11px; font-weight: 800; text-transform: uppercase; box-shadow: 2px 2px 0 #000; cursor: pointer; transition: transform 0.1s; margin-bottom: 16px;">Scan open pages now</button>
 
       <div class="section">
         <div class="section-label">Roles / Keywords</div>
@@ -481,11 +483,42 @@
           <button class="seg-btn active" data-val="all">All</button>
           <button class="seg-btn" data-val="today">Today</button>
           <button class="seg-btn" data-val="7days">7 days</button>
+          <button class="seg-btn" data-val="applied">Applied</button>
         </div>
         <button class="mark-all-btn" id="mark-all-btn" style="display:none;">Mark read</button>
       </div>
       <div id="feed-list-container">
         <div class="loading-spinner"><div class="spinner"></div> Loading…</div>
+      </div>
+    </div>
+    <!-- ── TAB 4: SETTINGS ── -->
+    <div class="tab-panel" id="tab-settings">
+      <div class="section">
+        <div class="section-label">Account</div>
+        <div style="font-size: 11px; margin-bottom: 4px;" id="settings-account-name"></div>
+        <div style="font-size: 9px; color: #888;" id="settings-account-id"></div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Notifications</div>
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-size: 11px;">Email Alerts</span>
+          <div class="toggle-switch" id="settings-email-toggle"></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Data</div>
+        <button id="btn-export-data" class="btn-primary" style="margin-bottom: 8px;">Export my data</button>
+        <button id="btn-clear-history" class="btn-primary" style="background: var(--amber); margin-bottom: 8px;">Clear job history</button>
+        <button id="btn-reset-ext" class="btn-primary" style="background: var(--red);">Reset extension</button>
+      </div>
+
+      <div class="section">
+        <div class="section-label">About</div>
+        <div style="font-size: 11px; margin-bottom: 4px;">Version 1.0.0</div>
+        <a href="#" style="font-size: 11px; color: var(--cyan); text-decoration: none; display: block; margin-bottom: 4px;">Report an issue</a>
+        <a href="#" style="font-size: 11px; color: var(--cyan); text-decoration: none; display: block;">What's new</a>
       </div>
     </div>
   </div>

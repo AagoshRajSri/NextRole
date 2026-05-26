@@ -1,7 +1,8 @@
 import { browser } from 'wxt/browser';
 import { profileStorage, trackedPagesStorage, unseenJobsStorage, monitorStateStorage, userIdStorage, UserProfile, timeAgo } from '../../lib/storage';
+import { CONFIG } from '../../lib/config';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = CONFIG.API_BASE_URL;
 
 // ────────────────────────────────────────────────────────
 // VIEWS
@@ -535,6 +536,41 @@ function setupAlertCards() {
   });
 }
 
+const KNOWN_COMPANY_URLS: Record<string, string> = {
+  'google': 'https://careers.google.com/jobs/',
+  'amazon': 'https://amazon.jobs/en/search?base_query=&loc_query=',
+  'microsoft': 'https://jobs.microsoft.com/en-us/search?q=',
+  'meta': 'https://www.metacareers.com/jobs/',
+  'apple': 'https://jobs.apple.com/en-us/search',
+  'netflix': 'https://jobs.netflix.com/',
+  'stripe': 'https://stripe.com/jobs/search',
+  'airbnb': 'https://careers.airbnb.com/',
+  'uber': 'https://www.uber.com/us/en/careers/search/',
+  'lyft': 'https://www.lyft.com/careers',
+  'crowdstrike': 'https://careers.crowdstrike.com/global/en/search-results',
+  'palo alto networks': 'https://jobs.paloaltonetworks.com/en/search-jobs/',
+  'cloudflare': 'https://boards.greenhouse.io/cloudflare/',
+  'datadog': 'https://careers.datadoghq.com/',
+  'mongodb': 'https://www.mongodb.com/careers/departments',
+  'linear': 'https://jobs.ashbyhq.com/linear',
+  'vercel': 'https://vercel.com/careers',
+  'notion': 'https://boards.greenhouse.io/notion',
+  'figma': 'https://jobs.lever.co/figma',
+  'infosys': 'https://career.infosys.com/joblist',
+  'wipro': 'https://careers.wipro.com/careers-home/jobs',
+  'tcs': 'https://ibegin.tcs.com/iBegin/',
+  'flipkart': 'https://www.flipkartcareers.com/#!/joblist',
+  'swiggy': 'https://careers.swiggy.com/#/',
+  'zomato': 'https://www.zomato.com/careers',
+};
+
+function getSuggestedUrl(companyName: string): string {
+  const key = companyName.toLowerCase().trim();
+  if (KNOWN_COMPANY_URLS[key]) return KNOWN_COMPANY_URLS[key];
+  const slug = key.replace(/\\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+  return `https://www.linkedin.com/company/${slug}/jobs/`;
+}
+
 async function handleLaunch() {
   const btn = document.getElementById('btn-launch') as HTMLButtonElement;
   btn.disabled = true; btn.textContent = 'Saving…';
@@ -554,6 +590,7 @@ async function handleLaunch() {
       experienceLevel: profileData.experienceLevel || 'fresher',
       alertMode: profileData.alertMode as any || 'instant',
       emailAlerts: !!profileData.emailAlerts,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       isOnboarded: true,
       createdAt: now,
       updatedAt: now,
@@ -562,7 +599,7 @@ async function handleLaunch() {
     await profileStorage.setValue(profileToSave);
     await monitorStateStorage.setValue({ active: true, lastPollAt: null, lastCycleMatchCount: 0, totalJobsFound: 0, totalAlertsCount: 0 });
 
-    await fetch(`${API_BASE}/api/profile`, {
+    fetch(`${API_BASE}/api/profile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
       body: JSON.stringify(profileToSave),
@@ -570,13 +607,89 @@ async function handleLaunch() {
 
     await browser.runtime.sendMessage({ type: 'START_MONITOR', profile: profileToSave });
 
-    const currTab = await browser.tabs.getCurrent();
-    if (currTab?.id) browser.tabs.remove(currTab.id);
-    else window.close();
+    if (profileToSave.watchlistCompanies.length > 0) {
+      showHandoffScreen(profileToSave.watchlistCompanies);
+    } else {
+      const currTab = await browser.tabs.getCurrent();
+      if (currTab?.id) browser.tabs.remove(currTab.id);
+      else window.close();
+    }
   } catch (err) {
     console.error(err);
     btn.disabled = false; btn.textContent = 'Try again';
   }
+}
+
+function showHandoffScreen(companies: string[]) {
+  currentView = 'wizard';
+  
+  const html = `
+    <div class="handoff-screen" style="max-width: 600px; margin: 0 auto; padding: 40px 20px; font-family: system-ui, sans-serif;">
+      <h2 style="font-size: 24px; font-weight: 800; margin-bottom: 8px; text-transform: uppercase;">Let's add your first pages to track</h2>
+      <p style="color: #555; margin-bottom: 24px; font-size: 14px;">NextRole works best when you explicitly track career pages. Here are suggested links for the companies on your watchlist:</p>
+      
+      <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 32px;">
+        ${companies.map(co => {
+          const url = getSuggestedUrl(co);
+          return `
+            <div class="handoff-card" style="display: flex; align-items: center; justify-content: space-between; padding: 16px; border: 2px solid #000; box-shadow: 4px 4px 0 #000; background: #fff; border-radius: 8px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <img src="https://www.google.com/s2/favicons?domain=${url}&sz=32" style="width: 24px; height: 24px;" onerror="this.style.display='none'">
+                <div>
+                  <div style="font-weight: 800; font-size: 16px; margin-bottom: 4px;">${esc(co)}</div>
+                  <div style="font-size: 12px; color: #555; word-break: break-all;">${esc(url)}</div>
+                </div>
+              </div>
+              <button class="btn-primary handoff-add-btn" data-url="${url}" data-co="${esc(co)}" style="background: #00FF88; color: #000; border: 2px solid #000; padding: 8px 16px; font-weight: 800; cursor: pointer; box-shadow: 2px 2px 0 #000; white-space: nowrap; margin-left: 16px;">+ Add to tracking</button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <button id="handoff-skip" style="background: none; border: none; color: #555; font-weight: 700; text-decoration: underline; cursor: pointer; font-size: 14px;">Skip for now</button>
+      </div>
+    </div>
+  `;
+
+  setRoot(html);
+
+  let addedUrl = '';
+
+  document.querySelectorAll('.handoff-add-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const url = (btn as HTMLElement).dataset.url!;
+      addedUrl = url;
+      btn.textContent = 'Added ✓';
+      (btn as HTMLButtonElement).disabled = true;
+      (btn as HTMLElement).style.background = '#ccc';
+      
+      await browser.runtime.sendMessage({ type: 'ADD_TRACKED_SEARCH', url });
+      
+      setTimeout(async () => {
+        setRoot(`
+          <div style="max-width: 600px; margin: 0 auto; padding: 60px 20px; text-align: center; font-family: system-ui, sans-serif;">
+            <div style="font-size: 48px; margin-bottom: 16px;">🎉</div>
+            <h2 style="font-size: 24px; font-weight: 800; margin-bottom: 8px;">NextRole is live</h2>
+            <p style="color: #555; margin-bottom: 24px;">We'll notify you when new jobs appear on the pages you're tracking.</p>
+            <p style="color: #555; margin-bottom: 32px;">Opening your first tracked page now to start the scan...</p>
+          </div>
+        `);
+        
+        await browser.tabs.create({ url: addedUrl, active: true });
+        
+        const currTab = await browser.tabs.getCurrent();
+        if (currTab?.id) browser.tabs.remove(currTab.id);
+        else window.close();
+      }, 1000);
+    });
+  });
+
+  document.getElementById('handoff-skip')?.addEventListener('click', async () => {
+    const currTab = await browser.tabs.getCurrent();
+    if (currTab?.id) browser.tabs.remove(currTab.id);
+    else window.close();
+  });
 }
 
 // ────────────────────────────────────────────────────────

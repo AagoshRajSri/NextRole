@@ -9,8 +9,11 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "worker": "tsx watch worker.ts",
+    "worker:start": "node dist/worker.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma db push",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:dev": "prisma migrate dev",
     "test:scraper": "tsx test-scraper.ts",
     "test:scraper:all": "tsx test-scraper-batch.ts",
     "scraper:health": "tsx -e \"import('./scraper').then(s => s.scrapeJobsWithResult(process.argv[2]).then(r => console.log(JSON.stringify(r, null, 2))))\" --"
@@ -22,6 +25,7 @@
     "bullmq": "^5.8.3",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^7.5.1",
     "ioredis": "^5.4.1",
     "marked": "^18.0.4",
     "pg": "^8.21.0",
@@ -30,7 +34,8 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "resend": "^3.2.0",
     "socket.io": "^4.8.3",
-    "stripe": "^15.8.0"
+    "stripe": "^15.8.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

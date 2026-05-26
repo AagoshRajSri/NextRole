@@ -108,6 +108,7 @@ function setupTabs() {
         // Clear badge optimistically
         browser.runtime.sendMessage({ type: 'CLEAR_BADGE' });
       }
+      if (tab === 'settings') loadSettings();
     });
   });
 }
@@ -158,6 +159,22 @@ function setupMonitorToggle() {
   monitorToggle.addEventListener('click', () => {
     browser.runtime.sendMessage({ type: 'TOGGLE_MONITOR' });
   });
+
+  const scanBtn = $('scan-open-pages-btn') as HTMLButtonElement;
+  if (scanBtn) {
+    scanBtn.addEventListener('click', () => {
+      scanBtn.disabled = true;
+      scanBtn.textContent = 'Scanning...';
+      browser.runtime.sendMessage({ type: 'TRIGGER_SCAN_ALL' }).then(res => {
+        setTimeout(() => {
+          scanBtn.disabled = false;
+          scanBtn.textContent = 'Scan open pages now';
+          if (res?.count) showToast(`Triggered scan on ${res.count} pages`);
+          else showToast('No tracked pages are currently open');
+        }, 1000);
+      });
+    });
+  }
 }
 
 // ────────────────────────────────────────────────────────
@@ -281,7 +298,7 @@ async function checkCurrentTab() {
   } catch {}
 }
 
-function loadWatchedPages() {
+async function loadWatchedPages() {
   const container = $('watched-list-container');
   if (trackedPages.length === 0) {
     container.innerHTML = `
@@ -294,64 +311,78 @@ function loadWatchedPages() {
     return;
   }
 
+  // Find which pages are currently open
+  const openTabs = await browser.tabs.query({});
+  const openUrls = new Set(openTabs.map(t => t.url ? normalizeCareerUrl(t.url) : ''));
+
   let html = '<div class="watched-list">';
   for (const s of trackedPages) {
-    const isError = s.lastScrapeStatus === 'error';
-    const isBlocked = s.lastScrapeStatus === 'blocked';
-    const isEmpty = s.lastScrapeStatus === 'empty';
+    const isOpen = openUrls.has(s.normalizedUrl);
     
-    let dotClass = 'pending';
-    let icon = '';
-    let tooltip = '';
+    let dotClass = isOpen ? 'ok' : 'pending';
+    let dotHtml = isOpen ? `<span class="status-dot" style="animation: blink 1s step-end infinite;"></span>` : `<span class="scrape-dot ${dotClass}"></span>`;
+    let statusText = isOpen ? `<span style="color:var(--green)">Active — scans every 15 min</span>` : `Open to scan`;
     
-    if (isError) {
-      dotClass = 'error';
-      icon = '<span title="Error: ' + escapeHtml(s.lastScrapeError || '') + '">❌</span>';
-    } else if (isBlocked) {
-      dotClass = 'warning';
-      icon = '<span title="LinkedIn requires login to scrape. Try adding specific job search URLs instead.">⚠️</span>';
-    } else if (isEmpty) {
-      dotClass = 'empty';
-      icon = '<span title="Page loaded but no jobs found. The company may not be actively hiring.">⚪</span>';
-    } else if (s.lastScrapeStatus === 'ok') {
-      dotClass = 'ok';
-    }
-
     const lastTime = s.lastScrapedAt ? timeAgo(s.lastScrapedAt) : 'pending';
-    const isLinkedInProblem = s.platform === 'linkedin' && (isBlocked || isEmpty);
 
     html += `
       <div class="watched-row-wrap" style="display:flex; flex-direction:column; gap:8px;">
-        <div class="watched-row ${isError ? 'error' : ''}">
+        <div class="watched-row">
           <div class="favicon-avatar"><img src="https://www.google.com/s2/favicons?domain=${escapeHtml(s.url)}&sz=16" onerror="this.style.display='none'"></div>
           <div class="watched-info">
             <div class="watched-domain" title="${escapeHtml(s.url)}">${escapeHtml(s.label)}</div>
-            <div class="watched-meta">
-              ${icon ? icon : `<span class="scrape-dot ${dotClass}"></span>`}
-              <span>${lastTime}</span>
-              ${isEmpty ? '<span style="color:var(--amber);">· no results</span>' : ''}
+            <div class="watched-meta" style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:6px;">
+              <div style="display:flex; align-items:center; gap:6px;">
+                ${dotHtml}
+                <span style="font-weight:700">${statusText}</span>
+              </div>
+              ${!isOpen ? `<button class="btn-open-scan" data-url="${escapeHtml(s.url)}" style="background:var(--cyan); color:#fff; border:1px solid #000; padding:2px 6px; font-size:9px; cursor:pointer; font-weight:700;">OPEN & SCAN</button>` : ''}
             </div>
+            ${s.lastScrapedAt ? `<div style="font-size:9px; color:#888; margin-top:2px;">Last scanned: ${lastTime}</div>` : ''}
           </div>
           ${s.newJobCount > 0 ? `<span class="new-badge">${s.newJobCount} new</span>` : ''}
           <button class="btn-trash" data-id="${s.id}" title="Remove">🗑</button>
         </div>
-        ${isLinkedInProblem ? `
-          <div class="linkedin-fallback-card" style="background:#fff; border:2px solid #000; padding:10px; box-shadow:3px 3px 0 #000; font-size:11px; font-weight:700;">
-            <div style="font-family:var(--display); font-size:12px; color:var(--red); font-weight:800;">⚠ LinkedIn limited access</div>
-            <div style="margin-top:4px;">LinkedIn restricts automated access without login. Try these more reliable alternatives:</div>
-            <ul style="margin:4px 0 8px 16px; font-weight:500;">
-              <li>Add a specific job search URL instead</li>
-              <li>Track the company's direct careers page</li>
-            </ul>
-            <div style="display:flex; gap:8px;">
-              <button class="btn-try-search" data-id="${s.id}" data-url="${escapeHtml(s.url)}" style="background:var(--cyan); color:#fff; border:2px solid #000; padding:4px 8px; font-weight:800; cursor:pointer; flex:1;">Try search URL</button>
-            </div>
-          </div>
-        ` : ''}
       </div>
     `;
   }
   html += '</div>';
+  
+  // Search builder modal HTML
+  html += `
+    <div id="search-builder-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9999; padding:20px; align-items:center; justify-content:center;">
+      <div style="background:var(--surface); border:3px solid #000; box-shadow:5px 5px 0 #000; width:100%; max-width:320px; padding:16px;">
+        <div style="font-family:var(--display); font-size:14px; font-weight:800; margin-bottom:12px; text-transform:uppercase;">Build LinkedIn Search</div>
+        <input type="text" id="sb-keywords" placeholder="Keywords (e.g. Security Engineer)" style="width:100%; border:2px solid #000; padding:8px; margin-bottom:8px; font-family:var(--mono); font-size:12px; font-weight:700;" />
+        <input type="text" id="sb-location" placeholder="Location (e.g. India)" style="width:100%; border:2px solid #000; padding:8px; margin-bottom:12px; font-family:var(--mono); font-size:12px; font-weight:700;" />
+        <div style="font-size:10px; margin-bottom:4px; font-weight:800;">Generated URL:</div>
+        <div id="sb-preview" style="background:#f0f0f0; border:1px solid #000; padding:6px; font-size:9px; word-break:break-all; margin-bottom:12px; min-height:30px;"></div>
+        <div style="display:flex; gap:8px;">
+          <button id="sb-cancel" style="background:#fff; border:2px solid #000; padding:6px; font-weight:800; cursor:pointer; flex:1;">Cancel</button>
+          <button id="sb-add" style="background:var(--green); color:#000; border:2px solid #000; padding:6px; font-weight:800; cursor:pointer; flex:2;">Add URL</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  container.innerHTML = html;
+
+  container.querySelectorAll('.btn-trash').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = (btn as HTMLElement).dataset.id!;
+      browser.runtime.sendMessage({ type: 'DELETE_TRACKED_SEARCH', id });
+    });
+  });
+
+  container.querySelectorAll('.btn-open-scan').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const url = (btn as HTMLElement).dataset.url!;
+      browser.tabs.create({ url, active: false });
+      btn.textContent = 'OPENING...';
+      (btn as HTMLButtonElement).disabled = true;
+      setTimeout(() => { loadWatchedPages(); }, 2000);
+    });
+  });
   
   // Search builder modal HTML
   html += `
@@ -471,10 +502,11 @@ function loadFeed() {
           <span>${escapeHtml(job.companyName)}</span>
           <span class="dot">·</span>
           <span>${escapeHtml(job.location)}</span>
-          ${job.sourceDomain ? `<span class="dot">·</span><span class="pill-mini">${escapeHtml(job.sourceDomain)}</span>` : ''}
+          ${job.sourceDomain ? `<span class="dot">·</span><span class="pill-mini btn-source-link" data-url="${escapeHtml(job.sourcePageUrl || job.url)}" title="View Source Page" style="cursor:pointer;">${escapeHtml(job.sourceDomain)}</span>` : ''}
         </div>
         <div style="display: flex; align-items: center; gap: 6px; margin-top: 8px;">
-          ${job.matchReason ? `<span class="match-badge">${escapeHtml(job.matchReason.replace('role:', 'Role: ').replace('company:', 'Company: '))}</span>` : ''}
+          ${job.matchScore ? `<span class="match-badge" style="background:${job.matchScore >= 80 ? 'var(--green)' : job.matchScore >= 60 ? 'var(--cyan)' : 'var(--amber)'};color:#000;">${job.matchScore >= 80 ? 'Strong Match' : job.matchScore >= 60 ? 'Good Match' : 'Partial Match'}</span>` : ''}
+          ${job.matchReason ? `<span class="match-badge" title="${escapeHtml(job.matchReason.replace(/,/g, '\\n'))}">${escapeHtml(job.matchReason.split(',')[0].replace('role:', 'Role: ').replace('company:', 'Company: '))}</span>` : ''}
           <span class="time-label">${ago}</span>
         </div>
         ${!job.seenAt ? '<div class="new-dot"></div>' : ''}
@@ -486,12 +518,19 @@ function loadFeed() {
 
   container.querySelectorAll('.feed-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      // Ignore clicks on action buttons
-      if ((e.target as HTMLElement).closest('.btn-icon')) return;
+      // Ignore clicks on action buttons or source links
+      if ((e.target as HTMLElement).closest('.btn-icon') || (e.target as HTMLElement).closest('.btn-source-link')) return;
       const url = (card as HTMLElement).dataset.url!;
       const id = (card as HTMLElement).dataset.id!;
       browser.tabs.create({ url });
       browser.runtime.sendMessage({ type: 'MARK_JOB_SEEN', jobId: id });
+    });
+  });
+
+  container.querySelectorAll('.btn-source-link').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const url = (btn as HTMLElement).dataset.url!;
+      browser.tabs.create({ url });
     });
   });
 
@@ -510,15 +549,94 @@ function loadFeed() {
   });
 
   container.querySelectorAll('.btn-apply').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const id = (btn as HTMLElement).dataset.id!;
-      // Optimistic logic to move job to applied (requires new message handler, simplified here to dismiss for now + visual feedback)
-      browser.runtime.sendMessage({ type: 'DISMISS_JOB', jobId: id });
+      const jobs = await unseenJobsStorage.getValue() || [];
+      const updated = jobs.map(j => j.id === id ? { ...j, applicationStatus: 'applied', appliedAt: Date.now() } : j);
+      await unseenJobsStorage.setValue(updated as any);
       showToast('Marked as applied!');
+      loadFeed();
+    });
+  });
+
+  // Event listener for status update (when currentFeedFilter === 'applied')
+  container.querySelectorAll('.status-select').forEach(sel => {
+    sel.addEventListener('change', async (e) => {
+      const id = (sel as HTMLElement).dataset.id!;
+      const val = (e.target as HTMLSelectElement).value;
+      const jobs = await unseenJobsStorage.getValue() || [];
+      const updated = jobs.map(j => j.id === id ? { ...j, applicationStatus: val } : j);
+      await unseenJobsStorage.setValue(updated as any);
+      loadFeed();
     });
   });
 
   markAllBtn.onclick = () => browser.runtime.sendMessage({ type: 'MARK_ALL_SEEN' });
+}
+
+// ────────────────────────────────────────────────────────
+// SETTINGS
+// ────────────────────────────────────────────────────────
+async function loadSettings() {
+  if (!profile) return;
+  const userId = await userIdStorage.getValue();
+  
+  const nameEl = $('settings-account-name');
+  if (nameEl) nameEl.textContent = `${profile.name} (${profile.email})`;
+  const idEl = $('settings-account-id');
+  if (idEl) idEl.textContent = `ID: ${userId || 'Not generated'}`;
+  
+  const emailToggle = $('settings-email-toggle');
+  if (emailToggle) {
+    emailToggle.classList.toggle('on', !!profile.emailAlerts);
+    emailToggle.onclick = () => {
+      const next = !emailToggle.classList.contains('on');
+      emailToggle.classList.toggle('on', next);
+      browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes: { emailAlerts: next } });
+    };
+  }
+
+  const exportBtn = $('btn-export-data');
+  if (exportBtn) {
+    exportBtn.onclick = async () => {
+      const data = {
+        exportedAt: new Date().toISOString(),
+        profile,
+        trackedPages,
+        jobs: unseenJobs,
+        monitorState
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      await browser.downloads.download({ url, filename: `nextrole-export-${new Date().toISOString().split('T')[0]}.json` });
+    };
+  }
+
+  const clearBtn = $('btn-clear-history');
+  if (clearBtn) {
+    clearBtn.onclick = async () => {
+      if (confirm('Are you sure you want to clear your entire job history? This cannot be undone.')) {
+        await unseenJobsStorage.setValue([]);
+        await dismissedJobIdsStorage.setValue([]);
+        browser.runtime.sendMessage({ type: 'UPDATE_BADGE' });
+        showToast('History cleared');
+        loadFeed();
+      }
+    };
+  }
+
+  const resetBtn = $('btn-reset-ext');
+  if (resetBtn) {
+    resetBtn.onclick = async () => {
+      if (confirm('DANGER: Reset extension? All settings and data will be permanently deleted.')) {
+        if (confirm('Are you ABSOLUTELY sure?')) {
+          await browser.storage.local.clear();
+          browser.tabs.create({ url: browser.runtime.getURL('/onboarding.html') });
+          window.close();
+        }
+      }
+    };
+  }
 }
 
 // ────────────────────────────────────────────────────────
@@ -557,5 +675,25 @@ function showToast(msg: string) {
   toast.classList.add('show');
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
+
+// ────────────────────────────────────────────────────────
+// ERROR BOUNDARY
+// ────────────────────────────────────────────────────────
+window.addEventListener('error', (e) => {
+  console.error('[NextRole] Popup error:', e.error);
+  document.body.innerHTML = `
+    <div style="padding: 20px; font-family: 'IBM Plex Mono', monospace; background: #050D17; color: #E2EAF4; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center;">
+      <div style="font-size: 24px;">⚡</div>
+      <div style="font-size: 13px; color: #00E5FF;">NextRole encountered an error</div>
+      <div style="font-size: 11px; color: #5A7A9A;">${e.error?.message || 'Unknown error'}</div>
+      <button onclick="window.location.reload()" style="background: transparent; border: 1px solid #00E5FF; color: #00E5FF; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 11px;">Retry</button>
+      <button onclick="chrome.runtime.openOptionsPage?.()" style="background: transparent; border: 1px solid #1A2E4A; color: #5A7A9A; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 11px;">Reset extension</button>
+    </div>
+  `;
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[NextRole] Unhandled rejection:', e.reason);
+});
 
 init();

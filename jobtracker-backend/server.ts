@@ -12,6 +12,9 @@ import {
   extractCompanyFromUrl,
   detectPlatform,
 } from './utils.js';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { z } from 'zod';
 
 dotenv.config();
 
@@ -30,15 +33,94 @@ app.use(express.json());
 app.use('/resumes', express.static(path.join(__dirname, 'public/resumes')));
 
 // ────────────────────────────────────────────────────────
-// CORS
+// CORS & RATE LIMITING & VALIDATION
 // ────────────────────────────────────────────────────────
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, X-User-Id');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE, PATCH');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
+const allowedOrigins = [
+  process.env.ALLOWED_ORIGINS || '',
+  ...(process.env.NODE_ENV === 'development' ? ['chrome-extension://fakeextensionidfordev'] : []),
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (origin.startsWith('chrome-extension://')) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  credentials: false,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'X-User-Id'],
+}));
+
+app.use('/api', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  message: { error: 'Too many requests, please slow down.' },
+  skip: (req) => process.env.NODE_ENV === 'development',
+}));
+
+app.use('/api/alerts/email', rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: { error: 'Email alert rate limit exceeded.' },
+}));
+
+app.use('/api/jobs/bulk', rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: 'Sync rate limit exceeded. Try again in a moment.' },
+}));
+
+const TrackedSearchSchema = z.object({
+  url: z.string().url().max(2048),
+  platform: z.string().max(50).optional(),
 });
+
+const JobBulkSchema = z.object({
+  pageUrl: z.string().url().max(2048),
+  jobs: z.array(z.object({
+    atsJobId: z.string().max(200),
+    title: z.string().max(300),
+    location: z.string().max(200).optional().default(''),
+    url: z.string().url().max(2048),
+    companyName: z.string().max(200).optional().default(''),
+    matchReason: z.string().max(200).optional().default(''),
+  })).max(100),
+});
+
+const ProfileSchema = z.object({
+  name: z.string().max(200).optional(),
+  phone: z.string().max(50).optional(),
+  email: z.string().email().max(200).optional(),
+  targetRoles: z.array(z.string().max(100)).max(20).optional(),
+  locations: z.array(z.string().max(100)).max(20).optional(),
+  watchlistCompanies: z.array(z.string().max(100)).max(50).optional(),
+  experienceLevel: z.enum(['fresher', '1-3', '3-7', '7+']).optional(),
+  alertMode: z.enum(['instant', 'daily', 'weekly']).optional(),
+  emailAlerts: z.boolean().optional(),
+  timezone: z.string().max(100).optional(),
+  isOnboarded: z.boolean().optional(),
+  monitorActive: z.boolean().optional(),
+  experience: z.string().max(10000).optional(),
+  skills: z.string().max(10000).optional(),
+  education: z.string().max(10000).optional(),
+  projects: z.string().max(10000).optional(),
+});
+
+function validate<T>(schema: z.ZodSchema<T>) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: result.error.issues.map(i => ({ path: i.path.join('.'), message: i.message }))
+      });
+    }
+    req.body = result.data;
+    next();
+  };
+}
 
 // ────────────────────────────────────────────────────────
 // REDIS + BULLMQ
@@ -106,8 +188,34 @@ const getUserId = (req: express.Request): string =>
 // ────────────────────────────────────────────────────────
 // HEALTH
 // ────────────────────────────────────────────────────────
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: Date.now() });
+app.get('/api/health', async (req, res) => {
+  const checks: Record<string, 'ok' | 'error'> = {};
+  
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = 'ok';
+  } catch {
+    checks.database = 'error';
+  }
+  
+  try {
+    if (redisSubscriber) {
+      await redisSubscriber.ping();
+      checks.redis = 'ok';
+    } else {
+      checks.redis = 'error';
+    }
+  } catch {
+    checks.redis = 'error';
+  }
+  
+  const allOk = Object.values(checks).every(v => v === 'ok');
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'ok' : 'degraded',
+    timestamp: new Date().toISOString(),
+    version: process.env.npm_package_version || '1.0.0',
+    checks,
+  });
 });
 
 app.get('/api/scraper-health', async (req, res) => {
@@ -171,7 +279,7 @@ app.get('/api/tracked-searches', async (req, res) => {
 });
 
 // POST — add a new tracked URL (normalised, deduped, auto-detect platform)
-app.post('/api/tracked-searches', async (req, res) => {
+app.post('/api/tracked-searches', validate(TrackedSearchSchema), async (req, res) => {
   const userId = getUserId(req);
   const { url } = req.body;
 
@@ -258,9 +366,86 @@ app.get('/api/new-jobs', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════
+// BULK SYNC (Client-Side Scraper)
+// ════════════════════════════════════════════════════════
+app.post('/api/jobs/bulk', validate(JobBulkSchema), async (req, res) => {
+  const userId = getUserId(req);
+  const { pageUrl, jobs } = req.body;
+  if (!pageUrl || !jobs || !Array.isArray(jobs)) return res.status(400).json({ error: 'Invalid payload' });
+
+  try {
+    const trackedSearch = await prisma.trackedSearch.findFirst({
+      where: { userId, url: normalizeCareerUrl(pageUrl) },
+    });
+    
+    if (!trackedSearch) return res.status(404).json({ error: 'Tracked search not found' });
+
+    let addedCount = 0;
+    for (const job of jobs) {
+      const existing = await prisma.jobSnapshot.findFirst({
+        where: { trackedSearchId: trackedSearch.id, atsJobId: job.atsJobId },
+      });
+      if (!existing) {
+        await prisma.jobSnapshot.create({
+          data: {
+            trackedSearchId: trackedSearch.id,
+            atsJobId: job.atsJobId,
+            title: job.title,
+            location: job.location || '',
+            url: job.url,
+            companyName: job.companyName || '',
+            matchReason: job.matchReason || '',
+            isNew: false, // Already notified in extension
+          },
+        });
+        addedCount++;
+      }
+    }
+    res.json({ success: true, addedCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════
+// EMAIL ALERTS (Client-Side Trigger)
+// ════════════════════════════════════════════════════════
+import { Resend } from 'resend';
+const resend = new Resend(process.env.RESEND_API_KEY || 're_dummy');
+
+app.post('/api/alerts/email', async (req, res) => {
+  const userId = getUserId(req);
+  const { jobId, jobTitle, companyName, jobUrl, matchReason } = req.body;
+  
+  if (!jobId || !jobTitle || !jobUrl) return res.status(400).json({ error: 'Missing job details' });
+
+  try {
+    if (redisSubscriber) {
+      const key = `email_sent:${userId}:${jobId}`;
+      const alreadySent = await redisSubscriber.get(key);
+      if (alreadySent) return res.status(429).json({ error: 'Email already sent for this job' });
+      await redisSubscriber.set(key, '1', 'EX', 86400 * 30);
+    }
+
+    if (process.env.RESEND_API_KEY) {
+      await resend.emails.send({
+        from: 'NextRole Alerts <alerts@nextrole.com>',
+        to: 'user@example.com', // Normally fetched from User profile
+        subject: `New Match: ${jobTitle} at ${companyName || 'Unknown'}`,
+        html: `<h2>NextRole Found a Match</h2><p><strong>${jobTitle}</strong> at ${companyName || 'Unknown'}</p><p>Match Reason: ${matchReason || 'Profile Match'}</p><a href="${jobUrl}">View Job</a>`
+      });
+    } else {
+      console.log('[Server] Mock Email Alert:', { jobId, jobTitle, companyName });
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════
 // ALL JOBS (FEED) API
 // ════════════════════════════════════════════════════════
-
 app.get('/api/jobs', async (req, res) => {
   const userId = getUserId(req);
   const range = (req.query.range as string) || 'all';
@@ -368,7 +553,7 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 
-app.post('/api/profile', async (req, res) => {
+app.post('/api/profile', validate(ProfileSchema), async (req, res) => {
   const userId = getUserId(req);
   const {
     name, phone, email, linkedinUrl,
