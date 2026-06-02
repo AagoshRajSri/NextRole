@@ -194,3 +194,38 @@ function profileConflictsWithSeniority(title: string, experienceLevel?: string):
   }
   return false;
 }
+
+import crypto from 'crypto';
+
+const ENCRYPTION_KEY = process.env.COOKIE_ENCRYPTION_KEY || 'default_secret_key_32_bytes_long_!!!'; // Must be 32 bytes
+const IV_LENGTH = 16;
+
+export function encryptData(text: string): string {
+  if (!text) return text;
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+}
+
+export function decryptData(text: string): string | null {
+  if (!text) return null;
+  try {
+    const parts = text.split(':');
+    if (parts.length !== 3) return null;
+    const iv = Buffer.from(parts[0], 'hex');
+    const authTag = Buffer.from(parts[1], 'hex');
+    const encryptedText = parts[2];
+    const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (e) {
+    return null;
+  }
+}

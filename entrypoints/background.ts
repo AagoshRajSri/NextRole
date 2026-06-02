@@ -18,6 +18,9 @@ import { logger } from '../lib/logger';
 import { CONFIG } from '../lib/config';
 import { io } from 'socket.io-client';
 import { getCompanyTrackingUrls } from '../lib/companyDirectory';
+import { calculateMatchScore, isCrossPlatformDuplicate } from '../lib/matchScoring';
+import { fireNotifications, getPendingNotification, clearPendingNotification } from '../lib/notificationManager';
+import { routeMessage } from '../lib/messageRouter';
 
 export default defineBackground(() => {
   const API_BASE = CONFIG.API_BASE_URL;
@@ -32,68 +35,7 @@ export default defineBackground(() => {
     return id;
   }
 
-  // ── MATCH SCORING ──
-  function calculateMatchScore(
-    job: { title: string; companyName?: string; location?: string },
-    profile: { targetRoles: string[]; watchlistCompanies: string[]; locations?: string[]; experienceLevel?: string }
-  ): { score: number; reason: string; breakdown: any } {
-    let score = 0;
-    const title = (job.title ?? '').toLowerCase();
-    const company = (job.companyName ?? '').toLowerCase();
-    const location = (job.location ?? '').toLowerCase();
-    const breakdown: any = { roleMatch: { matched: false }, companyMatch: { matched: false }, locationMatch: { matched: false }, seniorityMatch: { matched: false } };
-    let reason = '';
-
-    const seniorTerms = ['senior', 'staff', 'principal', 'lead', 'director', 'vp', 'head of'];
-    const juniorTerms = ['junior', 'associate', 'entry', 'intern', 'graduate', 'fresher'];
-    const isSeniorRole = seniorTerms.some(s => title.includes(s));
-    const isJuniorRole = juniorTerms.some(s => title.includes(s));
-    const isJuniorProfile = ['fresher', '1-3'].includes(profile.experienceLevel ?? '');
-
-    for (const role of profile.targetRoles || []) {
-      const r = role.trim().toLowerCase();
-      if (!r) continue;
-      if (title === r) { score += 50; reason = `role:${role}`; breakdown.roleMatch = { matched: true, keyword: role }; break; }
-      if (title.includes(r)) { score += 40; reason = `role:${role}`; breakdown.roleMatch = { matched: true, keyword: role }; break; }
-      if (r.split(' ').every(w => title.includes(w))) { score += 30; reason = `role:${role}`; breakdown.roleMatch = { matched: true, keyword: role }; break; }
-    }
-    if (score === 0) return { score: 0, reason: '', breakdown };
-
-    for (const co of profile.watchlistCompanies || []) {
-      const c = co.trim().toLowerCase();
-      if (c && (company.includes(c) || c.includes(company))) {
-        score += 25; if (!reason) reason = `company:${co}`; else reason += `,company:${co}`;
-        breakdown.companyMatch = { matched: true, company: co }; break;
-      }
-    }
-
-    const locs = profile.locations || [];
-    const hasRemote = locs.some(l => l.toLowerCase().includes('remote'));
-    const isRemote = location.includes('remote') || location.includes('anywhere');
-    if (isRemote && hasRemote) { score += 20; breakdown.locationMatch = { matched: true, location: 'Remote' }; }
-    else if (locs.some(l => location.includes(l.toLowerCase()))) { score += 20; breakdown.locationMatch = { matched: true, location: location }; }
-
-    if (profile.experienceLevel === '7+' && isSeniorRole) { score += 5; breakdown.seniorityMatch = { matched: true, note: 'Senior match' }; }
-    if (isJuniorProfile && isJuniorRole) { score += 5; breakdown.seniorityMatch = { matched: true, note: 'Entry-level match' }; }
-    if (isJuniorProfile && isSeniorRole) { score -= 10; breakdown.seniorityMatch = { matched: false, note: 'Overqualified role' }; }
-
-    return { score: Math.min(100, Math.max(0, score)), reason, breakdown };
-  }
-
-  // ── CROSS-PLATFORM DEDUP ──
-  function isCrossPlatformDuplicate(newJob: StoredJob, existing: StoredJob[]): boolean {
-    const t = newJob.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-    const c = newJob.companyName.toLowerCase().trim();
-    if (!c) return false;
-    const recent = existing.filter(j => Date.now() - j.firstSeenAt < 7 * 86400000);
-    return recent.some(j => {
-      const et = j.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-      const ec = j.companyName.toLowerCase().trim();
-      const titleSim = et === t || et.includes(t) || t.includes(et);
-      const compSame = ec === c || ec.includes(c) || c.includes(ec);
-      return titleSim && compSame;
-    });
-  }
+  // Match scoring and deduplication extracted to lib/matchScoring.ts
 
   // ── BADGE ──
   async function updateBadge() {
@@ -115,54 +57,12 @@ export default defineBackground(() => {
     } catch {}
   }
 
-  // ── NOTIFICATIONS ──
-  async function fireNotifications(newJobs: StoredJob[], profile: any) {
-    // Always fire OS notifications if onboarded — alertMode only controls email frequency
-    if (!profile.isOnboarded) return;
-    const worthy = newJobs.filter(j => (j.matchScore ?? 100) >= 40);
-    if (worthy.length === 0) return;
-
-    if (worthy.length === 1) {
-      const job = worthy[0];
-      const notifId = `job-${job.id}`;
-      await browser.notifications.create(notifId, {
-        type: 'basic',
-        iconUrl: browser.runtime.getURL('/icon/128.png'),
-        title: `🔔 ${job.title.slice(0, 45)}`,
-        message: `${job.companyName || 'New match'} · ${job.location || 'See listing'}`,
-        contextMessage: 'NextRole — Click to view',
-        requireInteraction: false,
-        buttons: [{ title: '📋 Open job' }, { title: '😴 Snooze 1h' }],
-      });
-      await storePendingNotification(notifId, job.url);
-      browser.alarms.create(`notif-keepalive-${notifId}`, { delayInMinutes: 0.5 });
-    } else {
-      await browser.notifications.create(`digest-${Date.now()}`, {
-        type: 'basic',
-        iconUrl: browser.runtime.getURL('/icon/128.png'),
-        title: `🔔 ${worthy.length} new job matches!`,
-        message: worthy.slice(0, 3).map(j => `• ${j.title} @ ${j.companyName}`).join('\n'),
-        contextMessage: 'NextRole — Click to open extension',
-        requireInteraction: false,
-      });
-    }
-    logger.info('notifications', `Fired notification for ${worthy.length} job(s)`);
-  }
-
-  async function storePendingNotification(notifId: string, jobUrl: string) {
-    try {
-      const pending = await browser.storage.session.get('pendingNotifications') as Record<string, any>;
-      const map = pending.pendingNotifications || {};
-      map[notifId] = { jobUrl, createdAt: Date.now() };
-      await browser.storage.session.set({ pendingNotifications: map });
-    } catch {}
-  }
+  // Notifications extracted to lib/notificationManager.ts
 
   browser.notifications.onButtonClicked.addListener(async (notifId, btnIdx) => {
     if (notifId.startsWith('digest-')) { browser.action.openPopup?.().catch(() => {}); return; }
     try {
-      const pending = await browser.storage.session.get('pendingNotifications') as Record<string, any>;
-      const entry = pending.pendingNotifications?.[notifId];
+      const entry = await getPendingNotification(notifId);
       if (btnIdx === 0 && entry?.jobUrl) {
         await browser.tabs.create({ url: entry.jobUrl, active: true });
         const jobId = notifId.replace('job-', '');
@@ -180,24 +80,25 @@ export default defineBackground(() => {
         } finally { release(); }
       }
       browser.notifications.clear(notifId);
-      const updated = { ...((await browser.storage.session.get('pendingNotifications') as Record<string, any>).pendingNotifications) };
-      delete updated[notifId];
-      await browser.storage.session.set({ pendingNotifications: updated });
-    } catch {}
+      await clearPendingNotification(notifId);
+    } catch (err) {
+      logger.warn('notifications', 'Error handling button click', err);
+    }
     await updateBadge();
   });
 
   browser.notifications.onClicked.addListener(async (notifId) => {
     try {
-      const pending = await browser.storage.session.get('pendingNotifications') as Record<string, any>;
-      const entry = pending.pendingNotifications?.[notifId];
-      if (entry?.jobUrl) await browser.tabs.create({ url: entry.jobUrl });
-    } catch {
-      if (notifId.startsWith('job-')) {
+      const entry = await getPendingNotification(notifId);
+      if (entry?.jobUrl) {
+        await browser.tabs.create({ url: entry.jobUrl });
+      } else if (notifId.startsWith('job-')) {
         const jobs = await unseenJobsStorage.getValue() ?? [];
         const job = jobs.find(j => j.id === notifId.replace('job-', ''));
         if (job?.url) await browser.tabs.create({ url: job.url });
       }
+    } catch (err) {
+      logger.warn('notifications', 'Error handling notification click', err);
     }
     browser.notifications.clear(notifId);
   });
@@ -223,8 +124,12 @@ export default defineBackground(() => {
         return;
       }
 
+      const fallbackCompany = extractReadableLabel(normalizedUrl).title;
       const matched = newJobs
-        .map(job => ({ job, ...calculateMatchScore(job, profile) }))
+        .map(job => {
+          const evalJob = { ...job, companyName: job.companyName || fallbackCompany };
+          return { job, ...calculateMatchScore(evalJob, profile) };
+        })
         .filter(m => m.score > 0);
 
       // Cross-platform dedup
@@ -267,10 +172,10 @@ export default defineBackground(() => {
       await fireNotifications(storedJobs, profile);
 
       if (tabId) {
-        browser.tabs.sendMessage(tabId, { type: 'NEW_JOBS_FOR_PAGE', payload: { url: payload.url, jobs: storedJobs } }).catch(() => {});
+        browser.tabs.sendMessage(tabId, { type: 'NEW_JOBS_FOR_PAGE', payload: { url: payload.url, jobs: storedJobs } }).catch(err => logger.warn('scan', 'Failed to send jobs to tab', err));
       }
 
-      syncJobsToBackend(storedJobs, normalizedUrl).catch(() => {});
+      syncJobsToBackend(storedJobs, normalizedUrl).catch(err => logger.warn('scan', 'syncJobsToBackend failed', err));
     } finally {
       release();
     }
@@ -395,147 +300,21 @@ export default defineBackground(() => {
 
   // ── MESSAGING ──
   browser.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
-    const handle = async () => {
-      switch (message.type) {
-        case 'PAGE_SCAN_RESULT':
-          await handleScanResult(message.payload, sender.tab?.id);
-          return { received: true };
-
-        case 'TRIGGER_SCAN_ALL': {
-          const tabs = await getOpenTrackedTabs();
-          tabs.forEach(({ tab }) => { if (tab.id) browser.tabs.sendMessage(tab.id, { type: 'TRIGGER_SCAN' }).catch(() => {}); });
-          return { success: true, count: tabs.length };
-        }
-
-        case 'TOGGLE_MONITOR': {
-          const ms = await monitorStateStorage.getValue();
-          if (!ms) return;
-          const next = !ms.active;
-          await monitorStateStorage.setValue({ ...ms, active: next });
-          if (next) browser.alarms.create(POLL_ALARM, { periodInMinutes: 15 });
-          else browser.alarms.clear(POLL_ALARM);
-          await updateBadge();
-          return { success: true };
-        }
-
-        case 'START_MONITOR': {
-          browser.alarms.create(POLL_ALARM, { periodInMinutes: 15 });
-          await updateBadge();
-          syncRemoteSelectors().catch(() => {});
-          connectSocket().catch(() => {});
-          return { success: true };
-        }
-
-        case 'UPDATE_BADGE':
-          await updateBadge();
-          return { received: true };
-
-        case 'CLEAR_BADGE':
-          await browser.action.setBadgeText({ text: '' });
-          return { received: true };
-
-        case 'ADD_TRACKED_SEARCH':
-        case 'ADD_TRACKED_URL': {
-          const url = message.url || message.payload?.url;
-          if (!url) return;
-          const normalized = normalizeCareerUrl(url);
-          const pages = await trackedPagesStorage.getValue() || [];
-          if (pages.find(p => p.normalizedUrl === normalized)) return { exists: true };
-          pages.push({
-            id: crypto.randomUUID(), url, normalizedUrl: normalized,
-            label: extractReadableLabel(url).title, subtitle: extractReadableLabel(url).subtitle,
-            addedAt: Date.now(), lastScrapedAt: null, lastScrapeStatus: 'pending', lastScrapeError: null,
-            newJobCount: 0, isPending: false, platform: detectPlatform(url),
-          });
-          await trackedPagesStorage.setValue(pages);
-          const userId = await getUserId();
-          const apiClient = new ApiClient(userId);
-          apiClient.post('/api/tracked-searches', { url, platform: detectPlatform(url) }).catch(() => {});
-          return { success: true };
-        }
-
-        case 'DELETE_TRACKED_SEARCH': {
-          const pages = await trackedPagesStorage.getValue() || [];
-          await trackedPagesStorage.setValue(pages.filter(p => p.id !== message.id));
-          return { success: true };
-        }
-
-        case 'PREFS_UPDATED': {
-          const profile = await profileStorage.getValue();
-          if (profile && message.changes) {
-            await profileStorage.setValue({ ...profile, ...message.changes, updatedAt: Date.now() });
-
-            // Auto-track careers pages for watchlist companies
-            if (message.changes.watchlistCompanies) {
-              autoTrackCompanyPages(message.changes.watchlistCompanies).catch(err =>
-                logger.error('auto-track', 'Failed to auto-track companies', err)
-              );
-            }
-          }
-          return { success: true };
-        }
-
-        case 'MARK_JOB_SEEN': {
-          const release = await storageLock.acquire();
-          try {
-            const jobs = await unseenJobsStorage.getValue() || [];
-            await unseenJobsStorage.setValue(jobs.map(j => j.id === message.jobId ? { ...j, seenAt: Date.now() } : j));
-          } finally { release(); }
-          await updateBadge();
-          return { success: true };
-        }
-
-        case 'MARK_ALL_SEEN': {
-          const release = await storageLock.acquire();
-          try {
-            const jobs = await unseenJobsStorage.getValue() || [];
-            await unseenJobsStorage.setValue(jobs.map(j => j.seenAt ? j : { ...j, seenAt: Date.now() }));
-          } finally { release(); }
-          await updateBadge();
-          return { success: true };
-        }
-
-        case 'DISMISS_JOB': {
-          const release = await storageLock.acquire();
-          try {
-            const jobs = await unseenJobsStorage.getValue() || [];
-            await unseenJobsStorage.setValue(jobs.map(j => j.id === message.jobId ? { ...j, dismissed: true } : j));
-            const dismissed = await dismissedJobIdsStorage.getValue() || [];
-            if (!dismissed.includes(message.jobId)) await dismissedJobIdsStorage.setValue([...dismissed, message.jobId]);
-          } finally { release(); }
-          await updateBadge();
-          return { success: true };
-        }
-
-        case 'SNOOZE_JOB': {
-          const release = await storageLock.acquire();
-          try {
-            const until = message.duration === 'tomorrow' ? Date.now() + 86400000 : Date.now() + 3600000;
-            const jobs = await unseenJobsStorage.getValue() || [];
-            await unseenJobsStorage.setValue(jobs.map(j => j.id === message.jobId ? { ...j, snoozedUntil: until } : j));
-          } finally { release(); }
-          return { success: true };
-        }
-
-        case 'PING': {
-          const start = Date.now();
-          const userId = await getUserId();
-          const apiClient = new ApiClient(userId);
-          const { error, offline } = await apiClient.get('/api/health');
-          const latency = Date.now() - start;
-          if (offline) return { status: 'offline', latency: null };
-          if (error) return { status: 'error', latency: null };
-          return { status: 'ok', latency };
-        }
-
-        case 'GET_SOCKET_STATUS': {
-          return { connected: socket ? socket.connected : false };
-        }
-
-        default: return undefined;
-      }
+    const deps = {
+      storageLock,
+      getUserId,
+      handleScanResult,
+      updateBadge,
+      autoTrackCompanyPages,
+      syncRemoteSelectors,
+      connectSocket,
+      getOpenTrackedTabs,
+      getSocketStatus: () => socket ? socket.connected : false,
+      POLL_ALARM
     };
-    handle().then(res => { if (res !== undefined) sendResponse(res); }).catch(() => {});
+    routeMessage(message, sender, deps)
+      .then(res => { if (res !== undefined) sendResponse(res); })
+      .catch(err => logger.warn('msg', 'Message routing failed', err));
     return true;
   });
 
@@ -551,7 +330,7 @@ export default defineBackground(() => {
     // 1. Trigger DOM scans in any open career tabs
     const openTabs = await getOpenTrackedTabs();
     for (const { tab } of openTabs) {
-      if (tab.id) browser.tabs.sendMessage(tab.id, { type: 'TRIGGER_SCAN' }).catch(() => {});
+      if (tab.id) browser.tabs.sendMessage(tab.id, { type: 'TRIGGER_SCAN' }).catch(err => logger.warn('poll', 'Failed to trigger scan on tab', err));
     }
 
     // 2. Poll backend for new jobs — fires notifications even with ZERO tabs open
@@ -651,12 +430,12 @@ export default defineBackground(() => {
 
     socket.on('connect', () => {
       logger.info('socket', 'Connected to real-time alerts server');
-      browser.runtime.sendMessage({ type: 'SOCKET_STATUS', connected: true }).catch(() => {});
+      browser.runtime.sendMessage({ type: 'SOCKET_STATUS', connected: true }).catch(err => logger.warn('socket', 'Failed to broadcast connect', err));
     });
 
     socket.on('disconnect', () => {
       logger.warn('socket', 'Disconnected from real-time alerts server');
-      browser.runtime.sendMessage({ type: 'SOCKET_STATUS', connected: false }).catch(() => {});
+      browser.runtime.sendMessage({ type: 'SOCKET_STATUS', connected: false }).catch(err => logger.warn('socket', 'Failed to broadcast disconnect', err));
     });
 
     socket.on('JOB_ALERT_DISCOVERED', async (job: any) => {
@@ -720,6 +499,9 @@ export default defineBackground(() => {
       }
       
       if (cookies.length > 0) {
+        // SECURITY TODO: Cookies are currently encrypted at rest in the backend (AES-256-GCM),
+        // but passing session cookies over the wire requires strict HTTPS and high trust.
+        // For enhanced security, implement E2E encryption (e.g. encrypt with user's public key here).
         const userId = await getUserId();
         const apiClient = new ApiClient(userId);
         await apiClient.post('/api/cookies', { cookies });
@@ -735,10 +517,10 @@ export default defineBackground(() => {
     if (ms?.active) browser.alarms.create(POLL_ALARM, { periodInMinutes: 15 });
     browser.alarms.create(DAILY_PRUNE, { periodInMinutes: 1440 });
     await updateBadge();
-    upgradeSortParams().catch(() => {});
-    syncRemoteSelectors().catch(() => {});
-    syncSessionCookies().catch(() => {});
-    connectSocket().catch(() => {});
+    upgradeSortParams().catch(err => logger.warn('startup', 'upgradeSortParams failed', err));
+    syncRemoteSelectors().catch(err => logger.warn('startup', 'syncRemoteSelectors failed', err));
+    syncSessionCookies().catch(err => logger.warn('startup', 'syncSessionCookies failed', err));
+    connectSocket().catch(err => logger.warn('startup', 'connectSocket failed', err));
   };
   browser.runtime.onStartup.addListener(setupAlarms);
   browser.runtime.onInstalled.addListener(setupAlarms);

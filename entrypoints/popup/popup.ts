@@ -11,11 +11,11 @@ import {
   timeAgo,
   isCareerPage,
   extractReadableLabel,
-  normalizeCareerUrl,
   userIdStorage,
   dismissedJobIdsStorage
 } from '../../lib/storage';
 import { logger } from '../../lib/logger';
+import { normalizeCareerUrl } from '../../lib/utils';
 
 // ────────────────────────────────────────────────────────
 // STATE
@@ -665,7 +665,7 @@ function setupFooter() {
 
 function pingBackend() {
   browser.runtime.sendMessage({ type: 'PING' }).then(res => {
-    if (res?.online) {
+    if (res?.status === 'ok') {
       latencyText.textContent = `Backend: ${res.latency}ms ✓`;
       latencyDot.className = 'latency-dot ' + (res.latency < 100 ? 'green' : res.latency < 300 ? 'yellow' : 'red');
     } else {

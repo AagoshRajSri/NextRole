@@ -4,11 +4,10 @@ import {
   unseenJobsStorage,
   profileStorage,
   isCareerPage,
-  normalizeCareerUrl,
   StoredJob,
   remoteSelectorsStorage,
 } from '../lib/storage';
-import { detectPlatform, injectSortParam, hasSortParam } from '../lib/utils';
+import { detectPlatform, injectSortParam, hasSortParam, normalizeCareerUrl } from '../lib/utils';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -402,8 +401,9 @@ export default defineContentScript({
       isTracked = true;
       setPillState('loading');
       
+      const remoteSelectors = await remoteSelectorsStorage.getValue() || {};
       const { scrapeCurrentPage } = await import('../lib/clientScraper');
-      const result = scrapeCurrentPage(document, currentUrl);
+      const result = scrapeCurrentPage(document, currentUrl, remoteSelectors);
       
       if (result.jobs.length > 0) {
         // Will be updated by PAGE_SCAN_RESULT response via listener
@@ -604,15 +604,9 @@ export default defineContentScript({
     }
 
     let lastUrl = window.location.href;
-    let mutationCooldown = false;
-    const urlObserver = new MutationObserver(() => {
-      if (mutationCooldown) return;
-      
+    const urlCheckInterval = setInterval(() => {
       const currentUrl = window.location.href;
       if (currentUrl === lastUrl) return;
-      
-      mutationCooldown = true;
-      setTimeout(() => { mutationCooldown = false; }, 2000);
       
       lastUrl = currentUrl;
       
@@ -635,9 +629,8 @@ export default defineContentScript({
           removePillIfExists();
         }
       }, 1500);
-    });
-    urlObserver.observe(document.body, { childList: true, subtree: true });
-    ctx.onInvalidated(() => urlObserver.disconnect());
+    }, 1000);
+    ctx.onInvalidated(() => clearInterval(urlCheckInterval));
     interceptSPANavigation();
     boot();
   },

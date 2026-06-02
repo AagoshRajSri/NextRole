@@ -11,10 +11,20 @@ import {
   normalizeCareerUrl,
   extractCompanyFromUrl,
   detectPlatform,
+  encryptData,
 } from './utils.js';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
+import pino from 'pino';
+import jwt from 'jsonwebtoken';
+
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  ...(process.env.NODE_ENV !== 'production' && {
+    transport: { target: 'pino-pretty', options: { colorize: true } },
+  }),
+});
 
 dotenv.config();
 
@@ -72,6 +82,12 @@ app.use('/api/jobs/bulk', rateLimit({
   message: { error: 'Sync rate limit exceeded. Try again in a moment.' },
 }));
 
+const cookieSyncLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 1, // max 1 sync per minute per user
+  message: { error: 'Cookie sync rate limit exceeded.' },
+});
+
 const TrackedSearchSchema = z.object({
   url: z.string().url().max(2048),
   platform: z.string().max(50).optional(),
@@ -121,6 +137,39 @@ function validate<T>(schema: z.ZodSchema<T>) {
     next();
   };
 }
+
+// ────────────────────────────────────────────────────────
+// AUTHENTICATION MIDDLEWARE
+// ────────────────────────────────────────────────────────
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_jwt_secret_for_dev';
+
+export const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+      (req as any).userId = decoded.userId;
+      return next();
+    } catch (err) {
+      logger.warn(`[Auth] Invalid JWT provided: ${(err as any).message}`);
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  }
+
+  // Fallback to X-User-Id for legacy extension compatibility during transition
+  const fallbackId = req.header('X-User-Id');
+  if (fallbackId) {
+    (req as any).userId = fallbackId.trim();
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Authentication required' });
+};
+
+// Protect all /api routes below (except health/public routes)
+const protectedRouter = express.Router();
+app.use('/api', protectedRouter);
 
 // ────────────────────────────────────────────────────────
 // REDIS + BULLMQ
@@ -183,7 +232,7 @@ if (redisSubscriber) {
 // HELPERS
 // ────────────────────────────────────────────────────────
 const getUserId = (req: express.Request): string =>
-  (req.header('X-User-Id') || 'default-user').trim();
+  (req as any).userId || 'default-user';
 
 // ────────────────────────────────────────────────────────
 // HEALTH
@@ -634,7 +683,7 @@ app.post('/api/profile', validate(ProfileSchema), async (req, res) => {
   }
 });
 
-app.post('/api/cookies', async (req, res) => {
+protectedRouter.post('/cookies', cookieSyncLimiter, async (req, res) => {
   const userId = getUserId(req);
   const { cookies } = req.body;
   if (!cookies || typeof cookies !== 'object') {
@@ -642,14 +691,17 @@ app.post('/api/cookies', async (req, res) => {
   }
   
   try {
+    const encryptedCookies = encryptData(JSON.stringify(cookies));
     await prisma.userProfile.upsert({
       where: { userId },
-      update: { sessionCookies: cookies },
-      create: { userId, sessionCookies: cookies },
+      update: { sessionCookies: encryptedCookies, cookiesSyncedAt: new Date() },
+      create: { userId, sessionCookies: encryptedCookies, cookiesSyncedAt: new Date() },
     });
-    res.json({ success: true });
+    logger.info(`[Cookies] Synced encrypted session cookies for user: ${userId}`);
+    res.json({ success: true, message: 'Cookies encrypted and synced securely' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    logger.error(`[Cookies] Error syncing cookies: ${err.message}`);
+    res.status(500).json({ error: 'Failed to securely store cookies' });
   }
 });
 

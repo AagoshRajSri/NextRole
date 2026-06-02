@@ -109,8 +109,6 @@ export const userIdStorage = storage.defineItem<string | null>('local:userId', {
 // UTILITIES
 // ────────────────────────────────────────────────────────
 
-export { normalizeCareerUrl } from './utils';
-
 export function extractReadableLabel(url: string): { title: string; subtitle: string } {
   try {
     const u = new URL(url);
