@@ -14,6 +14,7 @@ import { marked } from 'marked';
 import {
   extractCompanyFromUrl,
   jobMatchesPrefs,
+  decryptData,
   type UserPrefs,
 } from './utils.js';
 
@@ -49,7 +50,7 @@ console.log('[Worker] Connected to Redis. Initializing worker...');
 // MAIN SCRAPE WORKER
 // ────────────────────────────────────────────────────────
 
-async function scrapeWithRetry(url: string, maxRetries = 2): Promise<ScraperResult> {
+async function scrapeWithRetry(url: string, cookies: Array<Record<string, any>> = [], maxRetries = 2): Promise<ScraperResult> {
   let lastResult: ScraperResult | null = null;
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -59,13 +60,19 @@ async function scrapeWithRetry(url: string, maxRetries = 2): Promise<ScraperResu
       await new Promise(r => setTimeout(r, delay));
     }
     
-    const result = await scrapeJobsWithResult(url);
+    const result = await scrapeJobsWithResult(url, { cookies });
     lastResult = result;
     
     if (result.status === 'ok' || result.status === 'empty') break;
     
     if (result.status === 'blocked') {
       console.warn(`[worker] ${url} is blocked (${result.blockedReason}). Backing off.`);
+      break;
+    }
+    
+    // Don't retry validation errors (bad URLs) — they won't recover
+    if (result.status === 'error' && result.errorMessage?.startsWith('Skipped:')) {
+      console.warn(`[worker] ${result.errorMessage}`);
       break;
     }
     
@@ -101,8 +108,20 @@ const worker = new Worker('monitorQueue', async (job) => {
       experienceLevel: userProfile?.experienceLevel ?? undefined,
     };
 
-    // Scrape the page with retries
-    const result = await scrapeWithRetry(url);
+    // Decrypt stored session cookies for auth-wall bypass (LinkedIn etc.)
+    let sessionCookies: Array<Record<string, any>> = [];
+    if (userProfile?.sessionCookies) {
+      try {
+        const decrypted = decryptData(userProfile.sessionCookies as string);
+        if (decrypted) sessionCookies = JSON.parse(decrypted);
+        console.log(`[Worker] Loaded ${sessionCookies.length} session cookies for auth bypass.`);
+      } catch (e) {
+        console.warn('[Worker] Failed to decrypt session cookies (non-fatal):', e);
+      }
+    }
+
+    // Scrape the page with retries + cookie injection
+    const result = await scrapeWithRetry(url, sessionCookies);
 
     // Update DB with scrape result regardless of outcome
     await prisma.trackedSearch.update({

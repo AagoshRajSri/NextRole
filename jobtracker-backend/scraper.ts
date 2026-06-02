@@ -399,6 +399,26 @@ async function scrapeNaukri(url: string, options?: BrowserOptions): Promise<Scra
 // ════════════════════════════════════════════════════════
 async function scrapeLinkedIn(url: string, options?: BrowserOptions): Promise<ScraperResult> {
   const start = Date.now()
+
+  // ── URL validation guard ──────────────────────────────────────────
+  // Reject URLs that are not actual job listings pages:
+  try {
+    const u = new URL(url)
+    if (u.pathname.startsWith('/in/')) {
+      return {
+        jobs: [], status: 'error', jobsCount: 0, platform: 'linkedin', scrapeDurationMs: 0,
+        errorMessage: `Skipped: "${url}" is a LinkedIn profile URL, not a jobs page. Track a company jobs page (e.g. /company/google/jobs) or a search URL (/jobs/search?keywords=...).`,
+      }
+    }
+    if (u.pathname === '/jobs' || u.pathname === '/jobs/') {
+      return {
+        jobs: [], status: 'error', jobsCount: 0, platform: 'linkedin', scrapeDurationMs: 0,
+        errorMessage: `Skipped: "${url}" is LinkedIn's generic jobs homepage. Add search filters (keywords, location) or use a company page URL to get trackable results.`,
+      }
+    }
+  } catch {
+    return { jobs: [], status: 'error', jobsCount: 0, platform: 'linkedin', scrapeDurationMs: 0, errorMessage: `Invalid URL: ${url}` }
+  }
   
   // Try Guest API first for company pages
   const companyMatch = url.match(/linkedin\.com\/company\/([^/]+)/)
@@ -451,11 +471,13 @@ async function scrapeLinkedIn(url: string, options?: BrowserOptions): Promise<Sc
   const { page, cleanup } = await BrowserFactory.getPage({ stealth: true, disableResourceBlocking: true, ...options })
   
   try {
-    // Step 1: Navigate with realistic behavior
-    await page.goto(url, { waitUntil: 'domcontentloaded' })
+    // Step 1: Navigate, then wait for any JS redirects to settle
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    // Allow LinkedIn's SPA router to finish (prevents "Execution context was destroyed")
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
     
     // Human-like: random scroll before waiting for jobs
-    await page.evaluate(() => window.scrollTo({ top: 200, behavior: 'smooth' }))
+    await page.evaluate(() => window.scrollTo({ top: 200, behavior: 'smooth' })).catch(() => {})
     await page.waitForTimeout(800 + Math.random() * 1200)
     
     // Step 2: Check for block
@@ -579,7 +601,12 @@ async function scrollAndCollectLinkedIn(page: Page, initialJobs: ScrapedJob[]): 
   let noNewCount = 0
   
   for (let i = 0; i < 5; i++) {
-    await page.evaluate(() => window.scrollBy(0, 800))
+    // Wrap scroll in try/catch — page may navigate between iterations
+    try {
+      await page.evaluate(() => window.scrollBy(0, 800))
+    } catch {
+      break // Execution context destroyed (navigation) — stop scrolling
+    }
     await page.waitForTimeout(1000 + Math.random() * 500)
     
     const currentJobs = await tryLinkedInStrategyA(page)

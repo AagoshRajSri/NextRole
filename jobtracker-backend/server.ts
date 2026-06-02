@@ -357,6 +357,19 @@ app.post('/api/tracked-searches', validate(TrackedSearchSchema), async (req, res
 
   if (!url) return res.status(400).json({ error: 'URL is required.' });
 
+  // Reject LinkedIn URLs that will never produce results
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes('linkedin.com')) {
+      if (parsed.pathname.startsWith('/in/')) {
+        return res.status(400).json({ error: 'This is a LinkedIn profile URL, not a jobs page. Use a company jobs page (e.g. /company/google/jobs) or a search URL (/jobs/search?keywords=...).' });
+      }
+      if (parsed.pathname === '/jobs' || parsed.pathname === '/jobs/') {
+        return res.status(400).json({ error: 'This is LinkedIn\'s generic jobs homepage. Add search filters (keywords, location) or use a specific company page URL.' });
+      }
+    }
+  } catch { /* URL class will throw for non-URLs, but Zod already validated it */ }
+
   const normalised = normalizeCareerUrl(url);
   const platform = req.body.platform || detectPlatform(normalised);
 

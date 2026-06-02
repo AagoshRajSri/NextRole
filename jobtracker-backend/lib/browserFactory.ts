@@ -26,6 +26,7 @@ export interface BrowserOptions {
   proxy?: string             // http://user:pass@host:port
   timeout?: number           // navigation timeout in ms (default: 30000)
   disableResourceBlocking?: boolean // if true, don't block images/fonts
+  cookies?: Array<Record<string, any>> // raw browser cookies to inject (for auth bypass)
 }
 
 export class BrowserFactory {
@@ -77,6 +78,27 @@ export class BrowserFactory {
     const launcher = options.stealth !== false ? chromiumExtra : chromium
     const browser = await launcher.launch(launchOptions)
     const context = await browser.newContext(contextOptions)
+
+    // Inject session cookies for auth-wall bypass (e.g. LinkedIn logged-in state)
+    if (options.cookies && options.cookies.length > 0) {
+      const cookiesToInject = options.cookies
+        .filter(c => c.name && c.value)
+        .map(c => ({
+          name: String(c.name),
+          value: String(c.value),
+          domain: String(c.domain || '.linkedin.com'),
+          path: String(c.path || '/'),
+          // Chrome uses expirationDate (float seconds), Playwright uses expires (int seconds)
+          expires: c.expirationDate ? Math.floor(c.expirationDate) : -1,
+          httpOnly: Boolean(c.httpOnly),
+          secure: Boolean(c.secure),
+          sameSite: 'None' as const,
+        }));
+      await context.addCookies(cookiesToInject).catch(e =>
+        console.warn('[BrowserFactory] Cookie injection failed (non-fatal):', (e as Error).message)
+      );
+      console.log(`[BrowserFactory] Injected ${cookiesToInject.length} session cookies.`);
+    }
 
     // Inject anti-detection scripts into every page
     await context.addInitScript(() => {
