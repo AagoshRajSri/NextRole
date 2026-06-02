@@ -357,12 +357,13 @@ export default defineBackground(() => {
 
       logger.info('poll', `Backend poll found ${data.length} new job(s)`);
 
-      // Merge into local storage, deduplicating by id
+      // Merge into local storage, deduplicating by id OR url
       const existingJobs = await unseenJobsStorage.getValue() || [];
       const existingIds = new Set(existingJobs.map(j => j.id));
+      const existingUrls = new Set(existingJobs.map(j => j.url).filter(Boolean));
 
       const brandNew: StoredJob[] = data
-        .filter(j => !existingIds.has(j.id))
+        .filter(j => !existingIds.has(j.id) && !existingUrls.has(j.url))
         .map(j => ({
           id: j.id,
           title: j.title,
@@ -442,7 +443,9 @@ export default defineBackground(() => {
       logger.info('socket', 'New job alert received via socket', job);
       const profile = await profileStorage.getValue();
       if (!profile) return;
-      
+
+      const sourceDomain = (() => { try { return new URL(job.url).hostname.replace('www.', ''); } catch { return ''; } })();
+
       const newJob: StoredJob = {
         id: job.id,
         title: job.title,
@@ -450,7 +453,7 @@ export default defineBackground(() => {
         location: job.location,
         url: job.url,
         sourcePageUrl: job.url,
-        sourceDomain: '',
+        sourceDomain,
         matchReason: job.matchReason,
         matchScore: 100,
         firstSeenAt: Date.now(),
@@ -461,12 +464,10 @@ export default defineBackground(() => {
         applicationStatus: null,
       };
 
-      try {
-        newJob.sourceDomain = new URL(job.url).hostname.replace('www.', '');
-      } catch {}
-
       const jobs = await unseenJobsStorage.getValue() || [];
-      if (!jobs.some(j => j.id === job.id)) {
+      // Dedup by URL (not just by id) — handles client-scanned jobs with different ID format
+      const isDuplicate = jobs.some(j => j.id === job.id || j.url === job.url);
+      if (!isDuplicate) {
         await unseenJobsStorage.setValue([newJob, ...jobs].slice(0, 500));
         await updateBadge();
         await fireNotifications([newJob], profile);

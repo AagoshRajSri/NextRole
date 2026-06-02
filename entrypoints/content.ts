@@ -401,8 +401,8 @@ export default defineContentScript({
       isTracked = true;
       setPillState('loading');
       
-      const remoteSelectors = await remoteSelectorsStorage.getValue() || {};
       const { scrapeCurrentPage } = await import('../lib/clientScraper');
+      const remoteSelectors = await remoteSelectorsStorage.getValue() || {};
       const result = scrapeCurrentPage(document, currentUrl, remoteSelectors);
       
       if (result.jobs.length > 0) {

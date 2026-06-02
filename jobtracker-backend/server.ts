@@ -167,8 +167,60 @@ export const requireAuth = (req: express.Request, res: express.Response, next: e
   return res.status(401).json({ error: 'Authentication required' });
 };
 
+// ────────────────────────────────────────────────────────
+// PUBLIC ENDPOINTS
+// ────────────────────────────────────────────────────────
+app.get('/api/health', async (req, res) => {
+  const checks: Record<string, 'ok' | 'error'> = {};
+  
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = 'ok';
+  } catch {
+    checks.database = 'error';
+  }
+  
+  try {
+    if (redisSubscriber) {
+      await redisSubscriber.ping();
+      checks.redis = 'ok';
+    } else {
+      checks.redis = 'error';
+    }
+  } catch {
+    checks.redis = 'error';
+  }
+  
+  // Only DB is critical for core API — Redis is optional (real-time only)
+  const coreOk = checks.database === 'ok';
+  res.status(coreOk ? 200 : 503).json({
+    status: coreOk ? 'ok' : 'degraded',
+    timestamp: new Date().toISOString(),
+    version: process.env.npm_package_version || '1.0.0',
+    checks,
+  });
+});
+
+app.get('/api/selectors', (req, res) => {
+  res.json({
+    linkedin: {
+      strategyA: '.job-search-card, .base-search-card',
+      strategyB: '.jobs-search__results-list li, .scaffold-layout__list-container li',
+      title: '.job-search-card__title, .base-search-card__title, h3',
+      company: '.job-search-card__company-name, .base-search-card__subtitle h4, h4',
+      location: '.job-search-card__location, [class*="location"]'
+    },
+    workday: {
+      item: '[data-automation-id="jobItem"]',
+      title: 'a[data-automation-id="jobTitle"]',
+      location: 'dd.css-129m7dg'
+    }
+  });
+});
+
 // Protect all /api routes below (except health/public routes)
 const protectedRouter = express.Router();
+protectedRouter.use(requireAuth);
 app.use('/api', protectedRouter);
 
 // ────────────────────────────────────────────────────────
@@ -228,44 +280,15 @@ if (redisSubscriber) {
   });
 }
 
+// SELECTOR REGISTRY API has been moved to public routes section above
+
 // ────────────────────────────────────────────────────────
 // HELPERS
 // ────────────────────────────────────────────────────────
 const getUserId = (req: express.Request): string =>
   (req as any).userId || 'default-user';
 
-// ────────────────────────────────────────────────────────
-// HEALTH
-// ────────────────────────────────────────────────────────
-app.get('/api/health', async (req, res) => {
-  const checks: Record<string, 'ok' | 'error'> = {};
-  
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    checks.database = 'ok';
-  } catch {
-    checks.database = 'error';
-  }
-  
-  try {
-    if (redisSubscriber) {
-      await redisSubscriber.ping();
-      checks.redis = 'ok';
-    } else {
-      checks.redis = 'error';
-    }
-  } catch {
-    checks.redis = 'error';
-  }
-  
-  const allOk = Object.values(checks).every(v => v === 'ok');
-  res.status(allOk ? 200 : 503).json({
-    status: allOk ? 'ok' : 'degraded',
-    timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version || '1.0.0',
-    checks,
-  });
-});
+// HEALTH ENDPOINT has been moved to public routes section above
 
 app.get('/api/scraper-health', async (req, res) => {
   const userId = getUserId(req);
@@ -510,13 +533,20 @@ app.get('/api/jobs/new', async (req, res) => {
         trackedSearch: { userId },
         matchReason: { not: null },
         firstSeenAt: { gte: since },
-        seenAt: null,
         isNew: true,
       },
       include: { trackedSearch: { select: { url: true, platform: true } } },
       orderBy: { firstSeenAt: 'desc' },
       take: 50,
     });
+
+    // Mark as polled so they won't be re-fetched
+    if (jobs.length > 0) {
+      await prisma.jobSnapshot.updateMany({
+        where: { id: { in: jobs.map(j => j.id) } },
+        data: { isNew: false },
+      });
+    }
 
     res.json(
       jobs.map(j => ({
@@ -705,27 +735,7 @@ protectedRouter.post('/cookies', cookieSyncLimiter, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════
-// SELECTOR REGISTRY API
-// ════════════════════════════════════════════════════════
-
-app.get('/api/selectors', (req, res) => {
-  // Hardcoded for now; can be moved to a DB table or remote JSON later
-  res.json({
-    linkedin: {
-      strategyA: '.job-search-card, .base-search-card',
-      strategyB: '.jobs-search__results-list li, .scaffold-layout__list-container li',
-      title: '.job-search-card__title, .base-search-card__title, h3',
-      company: '.job-search-card__company-name, .base-search-card__subtitle h4, h4',
-      location: '.job-search-card__location, [class*="location"]'
-    },
-    workday: {
-      item: '[data-automation-id="jobItem"]',
-      title: 'a[data-automation-id="jobTitle"]',
-      location: 'dd.css-129m7dg'
-    }
-  });
-});
+// SELECTOR REGISTRY API has been moved to public routes section above
 
 // ════════════════════════════════════════════════════════
 // RESUME TAILORING API (kept for premium — no changes)
