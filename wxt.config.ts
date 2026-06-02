@@ -34,6 +34,7 @@ export default defineConfig({
       'scripting',
       'activeTab',
       'downloads',
+      'cookies',
     ],
     
     host_permissions: [

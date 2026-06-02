@@ -22,6 +22,7 @@ export interface UserProfile {
 export interface TrackedPage {
   id: string;
   url: string;
+  displayUrl?: string;
   normalizedUrl: string;
   label: string;
   subtitle: string;
@@ -94,6 +95,10 @@ export const dismissedJobIdsStorage = storage.defineItem<string[]>('local:dismis
 
 export const appliedJobsStorage = storage.defineItem<StoredJob[]>('local:appliedJobs', {
   fallback: [],
+});
+
+export const remoteSelectorsStorage = storage.defineItem<Record<string, any>>('local:remoteSelectors', {
+  fallback: {},
 });
 
 export const userIdStorage = storage.defineItem<string | null>('local:userId', {

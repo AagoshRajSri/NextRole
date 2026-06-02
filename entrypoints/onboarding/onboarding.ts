@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import { profileStorage, trackedPagesStorage, unseenJobsStorage, monitorStateStorage, userIdStorage, UserProfile, timeAgo } from '../../lib/storage';
 import { CONFIG } from '../../lib/config';
+import { getCompanyTrackingUrls } from '../../lib/companyDirectory';
 
 const API_BASE = CONFIG.API_BASE_URL;
 
@@ -536,39 +537,9 @@ function setupAlertCards() {
   });
 }
 
-const KNOWN_COMPANY_URLS: Record<string, string> = {
-  'google': 'https://careers.google.com/jobs/',
-  'amazon': 'https://amazon.jobs/en/search?base_query=&loc_query=',
-  'microsoft': 'https://jobs.microsoft.com/en-us/search?q=',
-  'meta': 'https://www.metacareers.com/jobs/',
-  'apple': 'https://jobs.apple.com/en-us/search',
-  'netflix': 'https://jobs.netflix.com/',
-  'stripe': 'https://stripe.com/jobs/search',
-  'airbnb': 'https://careers.airbnb.com/',
-  'uber': 'https://www.uber.com/us/en/careers/search/',
-  'lyft': 'https://www.lyft.com/careers',
-  'crowdstrike': 'https://careers.crowdstrike.com/global/en/search-results',
-  'palo alto networks': 'https://jobs.paloaltonetworks.com/en/search-jobs/',
-  'cloudflare': 'https://boards.greenhouse.io/cloudflare/',
-  'datadog': 'https://careers.datadoghq.com/',
-  'mongodb': 'https://www.mongodb.com/careers/departments',
-  'linear': 'https://jobs.ashbyhq.com/linear',
-  'vercel': 'https://vercel.com/careers',
-  'notion': 'https://boards.greenhouse.io/notion',
-  'figma': 'https://jobs.lever.co/figma',
-  'infosys': 'https://career.infosys.com/joblist',
-  'wipro': 'https://careers.wipro.com/careers-home/jobs',
-  'tcs': 'https://ibegin.tcs.com/iBegin/',
-  'flipkart': 'https://www.flipkartcareers.com/#!/joblist',
-  'swiggy': 'https://careers.swiggy.com/#/',
-  'zomato': 'https://www.zomato.com/careers',
-};
-
 function getSuggestedUrl(companyName: string): string {
-  const key = companyName.toLowerCase().trim();
-  if (KNOWN_COMPANY_URLS[key]) return KNOWN_COMPANY_URLS[key];
-  const slug = key.replace(/\\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-  return `https://www.linkedin.com/company/${slug}/jobs/`;
+  const { urls } = getCompanyTrackingUrls(companyName);
+  return urls[0];
 }
 
 async function handleLaunch() {

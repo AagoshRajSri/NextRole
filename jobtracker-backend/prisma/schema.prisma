@@ -61,6 +61,7 @@ model UserProfile {
   emailAlerts      Boolean  @default(false)
   isOnboarded      Boolean  @default(false)
   monitorActive    Boolean  @default(false)
+  sessionCookies   Json?
   // Legacy resume fields — kept for premium AI tailoring later
   experience       String   @default("") @db.Text
   skills           String   @default("") @db.Text

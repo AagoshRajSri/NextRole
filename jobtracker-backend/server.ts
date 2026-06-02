@@ -446,6 +446,46 @@ app.post('/api/alerts/email', async (req, res) => {
 // ════════════════════════════════════════════════════════
 // ALL JOBS (FEED) API
 // ════════════════════════════════════════════════════════
+
+// GET /api/jobs/new?since=<unix_ms> — lightweight endpoint for background polling
+// Returns only new, unseen jobs since the given timestamp. Used by the extension
+// alarm handler to fire system notifications even when no career tabs are open.
+app.get('/api/jobs/new', async (req, res) => {
+  const userId = getUserId(req);
+  const sinceMs = parseInt((req.query.since as string) || '0', 10);
+  const since = new Date(sinceMs > 0 ? sinceMs : Date.now() - 20 * 60 * 1000); // default: last 20 min
+
+  try {
+    const jobs = await prisma.jobSnapshot.findMany({
+      where: {
+        trackedSearch: { userId },
+        matchReason: { not: null },
+        firstSeenAt: { gte: since },
+        seenAt: null,
+        isNew: true,
+      },
+      include: { trackedSearch: { select: { url: true, platform: true } } },
+      orderBy: { firstSeenAt: 'desc' },
+      take: 50,
+    });
+
+    res.json(
+      jobs.map(j => ({
+        id: j.id,
+        title: j.title,
+        companyName: j.companyName || extractCompanyFromUrl(j.trackedSearch.url) || 'Company',
+        location: j.location,
+        url: j.url,
+        matchReason: j.matchReason,
+        firstSeenAt: (j.firstSeenAt as Date).getTime(),
+        sourceDomain: (() => { try { return new URL(j.trackedSearch.url).hostname; } catch { return ''; } })(),
+      })),
+    );
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/jobs', async (req, res) => {
   const userId = getUserId(req);
   const range = (req.query.range as string) || 'all';
@@ -592,6 +632,47 @@ app.post('/api/profile', validate(ProfileSchema), async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.post('/api/cookies', async (req, res) => {
+  const userId = getUserId(req);
+  const { cookies } = req.body;
+  if (!cookies || typeof cookies !== 'object') {
+    return res.status(400).json({ error: 'Invalid cookies payload' });
+  }
+  
+  try {
+    await prisma.userProfile.upsert({
+      where: { userId },
+      update: { sessionCookies: cookies },
+      create: { userId, sessionCookies: cookies },
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════
+// SELECTOR REGISTRY API
+// ════════════════════════════════════════════════════════
+
+app.get('/api/selectors', (req, res) => {
+  // Hardcoded for now; can be moved to a DB table or remote JSON later
+  res.json({
+    linkedin: {
+      strategyA: '.job-search-card, .base-search-card',
+      strategyB: '.jobs-search__results-list li, .scaffold-layout__list-container li',
+      title: '.job-search-card__title, .base-search-card__title, h3',
+      company: '.job-search-card__company-name, .base-search-card__subtitle h4, h4',
+      location: '.job-search-card__location, [class*="location"]'
+    },
+    workday: {
+      item: '[data-automation-id="jobItem"]',
+      title: 'a[data-automation-id="jobTitle"]',
+      location: 'dd.css-129m7dg'
+    }
+  });
 });
 
 // ════════════════════════════════════════════════════════

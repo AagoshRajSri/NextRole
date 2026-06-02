@@ -11,8 +11,11 @@ import {
   timeAgo,
   isCareerPage,
   extractReadableLabel,
-  normalizeCareerUrl
+  normalizeCareerUrl,
+  userIdStorage,
+  dismissedJobIdsStorage
 } from '../../lib/storage';
+import { logger } from '../../lib/logger';
 
 // ────────────────────────────────────────────────────────
 // STATE
@@ -36,6 +39,8 @@ const feedBadge = $('feed-badge');
 const toast = $('toast');
 const latencyText = $('latency-text');
 const latencyDot = $('latency-dot');
+const telemetryStatusPill = $('telemetry-status-pill');
+const telemetryStatusText = $('telemetry-status-text');
 
 // ────────────────────────────────────────────────────────
 // INIT
@@ -81,6 +86,14 @@ async function init() {
   checkCurrentTab();
   
   pingBackend();
+  checkSocketStatus();
+
+  // Listen for socket status updates
+  browser.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'SOCKET_STATUS') {
+      renderSocketStatus(msg.connected);
+    }
+  });
 
   // Refresh "time ago" every 30s
   setInterval(() => {
@@ -325,12 +338,18 @@ async function loadWatchedPages() {
     
     const lastTime = s.lastScrapedAt ? timeAgo(s.lastScrapedAt) : 'pending';
 
-    html += `
+      const displayUrl = s.displayUrl || s.url;
+      const hasSortInjected = s.displayUrl && s.displayUrl !== s.url;
+
+      html += `
       <div class="watched-row-wrap" style="display:flex; flex-direction:column; gap:8px;">
         <div class="watched-row">
-          <div class="favicon-avatar"><img src="https://www.google.com/s2/favicons?domain=${escapeHtml(s.url)}&sz=16" onerror="this.style.display='none'"></div>
+          <div class="favicon-avatar"><img src="https://www.google.com/s2/favicons?domain=${escapeHtml(displayUrl)}&sz=16" onerror="this.style.display='none'"></div>
           <div class="watched-info">
-            <div class="watched-domain" title="${escapeHtml(s.url)}">${escapeHtml(s.label)}</div>
+            <div class="watched-domain" title="${escapeHtml(displayUrl)}">
+              ${escapeHtml(s.label)}
+              ${hasSortInjected ? `<span style="font-size:9px; background:#e0f7fa; color:#00bcd4; padding:2px 4px; border:1px solid #00bcd4; border-radius:2px; margin-left:6px; vertical-align:middle; white-space:nowrap;">↕ newest first</span>` : ''}
+            </div>
             <div class="watched-meta" style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:6px;">
               <div style="display:flex; align-items:center; gap:6px;">
                 ${dotHtml}
@@ -381,32 +400,6 @@ async function loadWatchedPages() {
       btn.textContent = 'OPENING...';
       (btn as HTMLButtonElement).disabled = true;
       setTimeout(() => { loadWatchedPages(); }, 2000);
-    });
-  });
-  
-  // Search builder modal HTML
-  html += `
-    <div id="search-builder-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9999; padding:20px; align-items:center; justify-content:center;">
-      <div style="background:var(--surface); border:3px solid #000; box-shadow:5px 5px 0 #000; width:100%; max-width:320px; padding:16px;">
-        <div style="font-family:var(--display); font-size:14px; font-weight:800; margin-bottom:12px; text-transform:uppercase;">Build LinkedIn Search</div>
-        <input type="text" id="sb-keywords" placeholder="Keywords (e.g. Security Engineer)" style="width:100%; border:2px solid #000; padding:8px; margin-bottom:8px; font-family:var(--mono); font-size:12px; font-weight:700;" />
-        <input type="text" id="sb-location" placeholder="Location (e.g. India)" style="width:100%; border:2px solid #000; padding:8px; margin-bottom:12px; font-family:var(--mono); font-size:12px; font-weight:700;" />
-        <div style="font-size:10px; margin-bottom:4px; font-weight:800;">Generated URL:</div>
-        <div id="sb-preview" style="background:#f0f0f0; border:1px solid #000; padding:6px; font-size:9px; word-break:break-all; margin-bottom:12px; min-height:30px;"></div>
-        <div style="display:flex; gap:8px;">
-          <button id="sb-cancel" style="background:#fff; border:2px solid #000; padding:6px; font-weight:800; cursor:pointer; flex:1;">Cancel</button>
-          <button id="sb-add" style="background:var(--green); color:#000; border:2px solid #000; padding:6px; font-weight:800; cursor:pointer; flex:2;">Add URL</button>
-        </div>
-      </div>
-    </div>
-  `;
-  
-  container.innerHTML = html;
-
-  container.querySelectorAll('.btn-trash').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = (btn as HTMLElement).dataset.id!;
-      browser.runtime.sendMessage({ type: 'DELETE_TRACKED_SEARCH', id });
     });
   });
 
@@ -637,6 +630,27 @@ async function loadSettings() {
       }
     };
   }
+
+  // Load Activity Logs
+  const logConsole = $('activity-log-console');
+  const clearLogsBtn = $('btn-clear-logs');
+  if (logConsole && clearLogsBtn) {
+    const logs = await logger.getLogs();
+    if (logs.length === 0) {
+      logConsole.innerHTML = '<div style="color: #666; font-style: italic;">No recent activity</div>';
+    } else {
+      logConsole.innerHTML = logs.map(l => {
+        const time = new Date(l.timestamp).toLocaleTimeString([], { hour12: false });
+        const color = l.level === 'error' ? '#ff6b81' : l.level === 'warn' ? '#f1c40f' : '#00E5FF';
+        return `<div style="margin-bottom: 4px;"><span style="color: #888;">[${time}]</span> <span style="color: ${color};">[${l.context}]</span> ${escapeHtml(l.message)}</div>`;
+      }).join('');
+    }
+    
+    clearLogsBtn.onclick = async () => {
+      await logger.clearLogs();
+      logConsole.innerHTML = '<div style="color: #666; font-style: italic;">No recent activity</div>';
+    };
+  }
 }
 
 // ────────────────────────────────────────────────────────
@@ -662,6 +676,27 @@ function pingBackend() {
     latencyText.textContent = 'Backend: offline ✗';
     latencyDot.className = 'latency-dot red';
   });
+}
+
+function checkSocketStatus() {
+  browser.runtime.sendMessage({ type: 'GET_SOCKET_STATUS' }).then(res => {
+    if (res !== undefined) renderSocketStatus(res.connected);
+  }).catch(() => {});
+}
+
+function renderSocketStatus(connected: boolean) {
+  if (!telemetryStatusPill || !telemetryStatusText) return;
+  if (connected) {
+    telemetryStatusPill.className = 'status-pill live';
+    telemetryStatusPill.style.background = 'var(--cyan)';
+    telemetryStatusPill.style.color = '#fff';
+    telemetryStatusText.textContent = 'SYNCING';
+  } else {
+    telemetryStatusPill.className = 'status-pill paused';
+    telemetryStatusPill.style.background = '#ccc';
+    telemetryStatusPill.style.color = '#000';
+    telemetryStatusText.textContent = 'OFFLINE';
+  }
 }
 
 function escapeHtml(str: string): string {

@@ -58,14 +58,14 @@ export function detectPlatform(url: string): string {
     return 'generic'
   } catch { return 'generic' }
 }
-export function scrapeCurrentPage(doc: Document, url: string): ClientScrapeResult {
+export function scrapeCurrentPage(doc: Document, url: string, remoteSelectors: Record<string, any> = {}): ClientScrapeResult {
   const start = performance.now();
   const platform = detectPlatform(url);
 
   let result: { jobs: ScrapedJob[], strategy: string };
 
   switch (platform) {
-    case 'linkedin':        result = scrapeLinkedInDOM(doc, url); break;
+    case 'linkedin':        result = scrapeLinkedInDOM(doc, url, remoteSelectors.linkedin); break;
     case 'greenhouse':      result = scrapeGreenhouseDOM(doc, url); break;
     case 'lever':           result = scrapeLeverDOM(doc, url); break;
     case 'workday':         result = scrapeWorkdayDOM(doc, url); break;
@@ -102,7 +102,7 @@ export function scrapeCurrentPage(doc: Document, url: string): ClientScrapeResul
 // ════════════════════════════════════════════════════════
 // LINKEDIN
 // ════════════════════════════════════════════════════════
-function scrapeLinkedInDOM(doc: Document, url: string): { jobs: ScrapedJob[], strategy: string } {
+function scrapeLinkedInDOM(doc: Document, url: string, selectors?: any): { jobs: ScrapedJob[], strategy: string } {
   // Strategy 1: data-occludable-job-id (logged-in feed layout)
   const occludable = doc.querySelectorAll('[data-occludable-job-id]');
   if (occludable.length > 0) {
@@ -125,12 +125,17 @@ function scrapeLinkedInDOM(doc: Document, url: string): { jobs: ScrapedJob[], st
   }
 
   // Strategy 2: .job-search-card (public guest view)
-  const cards = doc.querySelectorAll('.job-search-card, .base-search-card');
+  const cardSelector = selectors?.strategyA || '.job-search-card, .base-search-card';
+  const titleSelector = selectors?.title || '.job-search-card__title, .base-search-card__title';
+  const companySelector = selectors?.company || '.job-search-card__company-name, .base-search-card__subtitle h4';
+  const locSelector = selectors?.location || '.job-search-card__location';
+  
+  const cards = doc.querySelectorAll(cardSelector);
   if (cards.length > 0) {
     const jobs = Array.from(cards).map(card => {
-      const titleEl = card.querySelector('.job-search-card__title, .base-search-card__title');
-      const companyEl = card.querySelector('.job-search-card__company-name, .base-search-card__subtitle h4');
-      const locationEl = card.querySelector('.job-search-card__location');
+      const titleEl = card.querySelector(titleSelector);
+      const companyEl = card.querySelector(companySelector);
+      const locationEl = card.querySelector(locSelector);
       const linkEl = card.querySelector('a[href*="/jobs/view/"]');
       const href = linkEl?.getAttribute('href') || '';
       const idMatch = href.match(/\/jobs\/view\/(\d+)/);
@@ -148,15 +153,20 @@ function scrapeLinkedInDOM(doc: Document, url: string): { jobs: ScrapedJob[], st
   }
 
   // Strategy 3: company jobs page layout (.jobs-search__results-list li)
-  const listItems = doc.querySelectorAll('.jobs-search__results-list li, .scaffold-layout__list-container li');
+  const listSelector = selectors?.strategyB || '.jobs-search__results-list li, .scaffold-layout__list-container li';
+  const listTitleSel = selectors?.title || 'h3, .base-search-card__title, strong';
+  const listCompSel = selectors?.company || 'h4, .base-search-card__subtitle';
+  const listLocSel = selectors?.location || '[class*="location"], [class*="Location"]';
+
+  const listItems = doc.querySelectorAll(listSelector);
   if (listItems.length > 0) {
     const jobs = Array.from(listItems).map(li => {
       const link = li.querySelector('a[href*="/jobs/view/"]');
       const href = link?.getAttribute('href') || '';
       const idMatch = href.match(/\/jobs\/view\/(\d+)/);
-      const titleEl = li.querySelector('h3, .base-search-card__title, strong');
-      const companyEl = li.querySelector('h4, .base-search-card__subtitle');
-      const locationEl = li.querySelector('[class*="location"], [class*="Location"]');
+      const titleEl = li.querySelector(listTitleSel);
+      const companyEl = li.querySelector(listCompSel);
+      const locationEl = li.querySelector(listLocSel);
       return {
         atsJobId: idMatch?.[1] || '',
         title: titleEl?.textContent?.trim() || link?.textContent?.trim() || '',

@@ -401,6 +401,10 @@
   <div class="popup-header">
     <div class="logo">NEXT<span>ROLE</span></div>
     <div class="header-right">
+      <div class="status-pill" id="telemetry-status-pill" style="background: #ccc; color: #000;">
+        <div class="status-dot"></div>
+        <span id="telemetry-status-text">OFFLINE</span>
+      </div>
       <div class="status-pill paused" id="header-status-pill">
         <div class="status-dot"></div>
         <span id="header-status-text">PAUSED</span>
@@ -519,6 +523,14 @@
         <div style="font-size: 11px; margin-bottom: 4px;">Version 1.0.0</div>
         <a href="#" style="font-size: 11px; color: var(--cyan); text-decoration: none; display: block; margin-bottom: 4px;">Report an issue</a>
         <a href="#" style="font-size: 11px; color: var(--cyan); text-decoration: none; display: block;">What's new</a>
+      </div>
+      
+      <div class="section">
+        <div class="section-label">Activity Log</div>
+        <div id="activity-log-console" style="background: #000; color: #0f0; font-family: var(--mono); font-size: 9px; padding: 8px; height: 120px; overflow-y: auto; border: 2px solid var(--border); box-shadow: inset 2px 2px 5px rgba(0,0,0,0.5);">
+          <!-- Logs injected here -->
+        </div>
+        <button id="btn-clear-logs" class="btn-primary" style="margin-top: 8px; font-size: 9px; padding: 4px 8px; background: var(--surface);">Clear Logs</button>
       </div>
     </div>
   </div>

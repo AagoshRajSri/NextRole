@@ -6,8 +6,9 @@ import {
   isCareerPage,
   normalizeCareerUrl,
   StoredJob,
+  remoteSelectorsStorage,
 } from '../lib/storage';
-import { detectPlatform } from '../lib/utils';
+import { detectPlatform, injectSortParam, hasSortParam } from '../lib/utils';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -54,7 +55,7 @@ export default defineContentScript({
       window.addEventListener('popstate', handleUrlChange)
     }
 
-    let urlChangeTimer;
+    let urlChangeTimer: any;
     let lastHandledUrl = '';
 
     function handleUrlChange() {
@@ -66,8 +67,7 @@ export default defineContentScript({
       urlChangeTimer = setTimeout(() => {
         lastHandledUrl = currentUrl
         if (isCareerPage(currentUrl, document)) {
-          updatePillForCurrentPage()
-          runPageScanWithRetry()
+          boot()
         } else {
           removePillIfExists()
         }
@@ -295,6 +295,16 @@ export default defineContentScript({
         }
 
         const platform = detectPlatform(window.location.href);
+        const sortedUrl = injectSortParam(normalizeCareerUrl(window.location.href), platform);
+        
+        const isListingPage = isJobListingPage(window.location.href, platform);
+        if (isListingPage && sortedUrl !== normalizeCareerUrl(window.location.href) && !hasSortParam(window.location.href, platform)) {
+          if (isSpaPage(platform)) {
+            window.history.replaceState({}, '', sortedUrl);
+            window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           if (attempt > 0) {
@@ -302,7 +312,8 @@ export default defineContentScript({
           }
           
           const { scrapeCurrentPage } = await import('../lib/clientScraper');
-          const result = scrapeCurrentPage(document, window.location.href);
+          const remoteSelectors = await remoteSelectorsStorage.getValue() || {};
+          const result = scrapeCurrentPage(document, window.location.href, remoteSelectors);
 
           lastScanTime = Date.now();
           lastScanPlatform = result.platform;
@@ -347,16 +358,35 @@ export default defineContentScript({
       }
     }
 
+    function isJobListingPage(url: string, platform: string): boolean {
+      try {
+        const path = new URL(url).pathname.toLowerCase()
+        const jobDetailPatterns = ['/jobs/view/', '/job/', '/jobdetail', '/position/',
+                                    '/careers/job/', '/jobs/results/12', '/requisition/']
+        if (jobDetailPatterns.some(p => path.includes(p))) return false
+        return true
+      } catch { return false }
+    }
+
+    function isSpaPage(platform: string): boolean {
+      return ['eightfold', 'google', 'workday', 'greenhouse', 'ashby',
+              'wellfound', 'workable', 'linkedin'].includes(platform)
+    }
+
     async function trackAndScan() {
       const currentUrl = window.location.href;
+      const platform = detectPlatform(currentUrl);
       const normalized = normalizeCareerUrl(currentUrl);
+      const sortedUrl = injectSortParam(normalized, platform);
+      
       const pages = await trackedPagesStorage.getValue() ?? [];
       
-      if (!pages.find(p => p.normalizedUrl === normalized)) {
+      if (!pages.find(p => p.normalizedUrl === normalizeCareerUrl(sortedUrl))) {
         pages.push({
           id: crypto.randomUUID(),
-          url: currentUrl,
-          normalizedUrl: normalized,
+          url: sortedUrl,
+          displayUrl: currentUrl,
+          normalizedUrl: normalizeCareerUrl(sortedUrl),
           label: document.title || 'Career Page',
           subtitle: window.location.hostname,
           addedAt: Date.now(),
@@ -365,7 +395,7 @@ export default defineContentScript({
           lastScrapeError: null,
           newJobCount: 0,
           isPending: false,
-          platform: detectPlatform(currentUrl),
+          platform: platform,
         });
         await trackedPagesStorage.setValue(pages);
       }
@@ -544,15 +574,18 @@ export default defineContentScript({
       buildHud(companyName);
       setPillState(isTracked ? 'tracking' : 'available');
 
-      browser.runtime.onMessage.addListener((msg: any) => {
-        if (msg.type === 'NEW_JOBS_FOR_PAGE' && msg.payload.url === window.location.href) {
-          cachedJobs = msg.payload.jobs;
-          setPillState('tracking-new', cachedJobs.filter(j => !j.seenAt).length);
-          renderHudContent();
-        } else if (msg.type === 'TRIGGER_SCAN') {
-          if (isTracked) runPageScanWithRetry();
-        }
-      });
+      if (!(window as any).__nrListenerAdded) {
+        (window as any).__nrListenerAdded = true;
+        browser.runtime.onMessage.addListener((msg: any) => {
+          if (msg.type === 'NEW_JOBS_FOR_PAGE' && msg.payload.url === window.location.href) {
+            cachedJobs = msg.payload.jobs;
+            setPillState('tracking-new', cachedJobs.filter(j => !j.seenAt).length);
+            renderHudContent();
+          } else if (msg.type === 'TRIGGER_SCAN') {
+            if (isTracked) runPageScanWithRetry();
+          }
+        });
+      }
 
       const allJobs = await unseenJobsStorage.getValue() || [];
       cachedJobs = allJobs.filter(j => j.sourcePageUrl === window.location.href);
