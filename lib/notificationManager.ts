@@ -11,33 +11,45 @@ import { logger } from './logger';
  * Fire OS-level notifications for newly matched jobs.
  * Always fires if the user is onboarded — alertMode only controls *email* frequency.
  */
-export async function fireNotifications(newJobs: StoredJob[], profile: { isOnboarded?: boolean }): Promise<void> {
+export async function fireNotifications(newJobs: StoredJob[], profile: { isOnboarded?: boolean; name?: string }): Promise<void> {
   if (!profile.isOnboarded) return;
   const worthy = newJobs.filter(j => (j.matchScore ?? 100) >= 40);
   if (worthy.length === 0) return;
 
+  const firstName = profile.name ? profile.name.trim().split(' ')[0] : '';
+
   if (worthy.length === 1) {
     const job = worthy[0];
     const notifId = `job-${job.id}`;
+    const title = firstName 
+      ? `Hey ${firstName}, new match found! 🎯`
+      : `New match found! 🎯`;
+    const message = `💼 ${job.title}\n🏢 ${job.companyName}\n📍 ${job.location || 'Remote'}${job.matchScore ? ` · Score: ${job.matchScore}%` : ''}`;
+
     await browser.notifications.create(notifId, {
       type: 'basic',
       iconUrl: browser.runtime.getURL('/icon/128.png'),
-      title: `🔔 ${job.title.slice(0, 45)}`,
-      message: `${job.companyName || 'New match'} · ${job.location || 'See listing'}`,
+      title: title,
+      message: message,
       contextMessage: 'NextRole — Click to view',
-      requireInteraction: false,
+      requireInteraction: true,
       buttons: [{ title: '📋 Open job' }, { title: '😴 Snooze 1h' }],
     });
     await storePendingNotification(notifId, job.url);
     browser.alarms.create(`notif-keepalive-${notifId}`, { delayInMinutes: 0.5 });
   } else {
+    const title = firstName
+      ? `Hey ${firstName}, we found ${worthy.length} new matches! 🚀`
+      : `We found ${worthy.length} new matches! 🚀`;
+    const message = worthy.slice(0, 3).map(j => `✨ ${j.title} @ ${j.companyName}`).join('\n');
+
     await browser.notifications.create(`digest-${Date.now()}`, {
       type: 'basic',
       iconUrl: browser.runtime.getURL('/icon/128.png'),
-      title: `🔔 ${worthy.length} new job matches!`,
-      message: worthy.slice(0, 3).map(j => `• ${j.title} @ ${j.companyName}`).join('\n'),
+      title: title,
+      message: message,
       contextMessage: 'NextRole — Click to open extension',
-      requireInteraction: false,
+      requireInteraction: true,
     });
   }
   logger.info('notifications', `Fired notification for ${worthy.length} job(s)`);

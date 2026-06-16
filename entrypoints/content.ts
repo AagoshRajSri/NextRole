@@ -8,11 +8,201 @@ import {
   remoteSelectorsStorage,
 } from '../lib/storage';
 import { detectPlatform, injectSortParam, hasSortParam, normalizeCareerUrl } from '../lib/utils';
+import { extractFollowedCompaniesDom, isLinkedInPagesUrl, isFollowedCompaniesApiUrl, parseFollowedCompaniesResponse } from '../lib/slugExtractor';
+import { getJobStore, markJobApplied } from '../lib/jobStore';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_idle',
   main(ctx) {
+    // [NEXTROLE-FIX-B2] Guard: if extension context is already invalid on load, bail out cleanly
+    function isExtensionContextValid(): boolean {
+      try {
+        // Accessing browser.runtime.id throws if context is invalid
+        return !!browser.runtime.id
+      } catch {
+        return false
+      }
+    }
+
+    if (!isExtensionContextValid()) {
+      console.warn('[NextRole] Extension context invalid on load, skipping init')
+      // do not return here - let the rest of the content script run
+    }
+
+    // [NEXTROLE-FIX-B2] Safe message sender that silently handles inactive service worker
+    async function safeSendMessage(message: object): Promise<void> {
+      try {
+        await safeSendMessage(message)
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (
+          msg.includes('Extension context invalidated') ||
+          msg.includes('Could not establish connection') ||
+          msg.includes('receiving end does not exist')
+        ) {
+          return // expected, not an error
+        }
+        console.warn('[NextRole:Content] Unexpected message error:', msg)
+      }
+    }
+    // [NEXTROLE-FIX-B1] — Voyager API intercept
+    ;(function installFetchIntercept() {
+      if ((window as any).__nr_fetch_intercepted) return
+      ;(window as any).__nr_fetch_intercepted = true
+
+      const _originalFetch = window.fetch.bind(window)
+      window.fetch = async function(...args: Parameters<typeof fetch>) {
+        const response = await _originalFetch(...args)
+
+        try {
+          let url = ''
+          try {
+            if (typeof args[0] === 'string') url = args[0]
+            else if (args[0] instanceof URL) url = args[0].href
+            else if (args[0] instanceof Request) url = args[0].url
+          } catch { return response }
+
+          if (!url.startsWith('https://www.linkedin.com')) return response
+          if (url.startsWith('https://www.linkedin.com/li/')) return response
+          if (url.includes('sensorCollect')) return response
+          if (url.includes('realtime')) return response
+          if (url.includes('li/track')) return response
+
+          const isJobEndpoint =
+            (url.includes('/api/jobs') && !url.includes('/api/jobsV2/tracker')) ||
+            url.includes('/voyager/api/jobs') ||
+            url.includes('jobPostings') ||
+            url.includes('jobPosting?') ||
+            (url.includes('/jobs-guest/jobs') && url.includes('currentJobId'))
+
+          // [FIX-2A] Intercept followed companies API
+          const isFollowingEndpoint = isFollowedCompaniesApiUrl(url)
+
+          if (!isJobEndpoint && !isFollowingEndpoint) return response
+
+          if (isFollowingEndpoint) {
+            const cloned2 = response.clone()
+            cloned2.json().then((rawJson: unknown) => {
+              const companies = parseFollowedCompaniesResponse(rawJson)
+              if (companies.length > 0) {
+                (window as any).__nrApiExtractedCompanies = true;
+                safeSendMessage({
+                  type: 'UPDATE_FOLLOWED_COMPANIES',
+                  payload: companies
+                })
+              }
+            }).catch(() => {})
+          }
+
+          if (!isJobEndpoint) return response
+
+          let cloned: Response
+          try {
+            cloned = response.clone()
+          } catch { return response }
+
+          cloned.json().then((rawJson: unknown) => {
+            let slug = ''
+            try {
+              const urlObj = new URL(url)
+              slug = urlObj.searchParams.get('f_C') || ''
+              
+              if (!slug) {
+                const urn = urlObj.searchParams.get('organizationUrn')
+                if (urn) {
+                  const match = urn.match(/urn:li:organization:(\d+)/)
+                  slug = match ? match[1] : urn
+                }
+              }
+            } catch {}
+
+            if (!slug) {
+              const fCmatch = url.match(/f_C,value:List\(([^)]+)\)/)
+              if (fCmatch) slug = fCmatch[1]
+            }
+
+            if (!slug) {
+              const slugMatch = url.match(/\/company\/([a-zA-Z0-9\-_\.]+)\/jobs/)
+              if (slugMatch) slug = slugMatch[1]
+            }
+
+            safeSendMessage({
+              type: 'VOYAGER_JOB_DATA',
+              payload: { rawJson, companySlug: slug, companyName: slug, companyLogoUrl: '' }
+            })
+          }).catch(() => {})
+
+        } catch {
+        }
+        return response
+      }
+    })()
+
+    // [NEXTROLE-FIX-B4] — LinkedIn Pages company extraction
+    function tryExtractAndSendCompanies() {
+      const companies = extractFollowedCompaniesDom(document)
+      if (companies.length > 0) {
+        safeSendMessage({
+          type: 'UPDATE_FOLLOWED_COMPANIES',
+          payload: companies
+        })
+        showNrToast(`NextRole: Found ${companies.length} companies to monitor`)
+      }
+    }
+
+    // [FIX-2C] On LinkedIn Pages URL — use API intercept as primary,
+    // DOM as timed fallback only
+    if (isLinkedInPagesUrl(window.location.href)) {
+      let domAttempts = 0
+      const domFallback = () => {
+        if ((window as any).__nrApiExtractedCompanies) return; // Skip if API intercept succeeded
+        
+        domAttempts++
+        const companies = extractFollowedCompaniesDom(document)
+        if (companies.length > 0) {
+          safeSendMessage({ type: 'UPDATE_FOLLOWED_COMPANIES', payload: companies })
+          showNrToast(`NextRole: Tracking ${companies.length} followed companies`)
+        } else if (domAttempts < 2) {
+          setTimeout(domFallback, 5000)
+        } else {
+          console.log('[NextRole:Slugs] DOM fallback exhausted — waiting for API intercept')
+        }
+      }
+      setTimeout(domFallback, 3000)
+    }
+
+    // [NEXTROLE-V1-NEW]
+    function showNrToast(message: string) {
+      const existing = document.getElementById('nr-toast')
+      if (existing) existing.remove()
+
+      const toast = document.createElement('div')
+      toast.id = 'nr-toast'
+      toast.textContent = message
+      toast.style.cssText = `
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 2147483647;
+        background: rgba(10, 22, 40, 0.95);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(0, 240, 255, 0.4);
+        color: #00f0ff;
+        font-family: 'JetBrains Mono', monospace, sans-serif;
+        font-size: 12px;
+        padding: 10px 16px;
+        border-radius: 8px;
+        box-shadow: 0 0 16px rgba(0, 240, 255, 0.2);
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+      `
+      document.body.appendChild(toast)
+      setTimeout(() => {
+        toast.style.opacity = '0'
+        setTimeout(() => toast.remove(), 300)
+      }, 3500)
+    }
     let pillButton: HTMLElement | null = null;
     let hudPanel: HTMLElement | null = null;
     let hudBody: HTMLElement | null = null;
@@ -318,16 +508,18 @@ export default defineContentScript({
           lastScanPlatform = result.platform;
 
           if (result.jobs.length > 0) {
-            await browser.runtime.sendMessage({
+            await safeSendMessage({
               type: 'PAGE_SCAN_RESULT',
               payload: { url: window.location.href, platform: result.platform, jobs: result.jobs, scannedAt: lastScanTime }
             });
+            setPillState(isTracked ? 'tracking' : 'available');
+            renderHudContent();
             return;
           }
 
-          const isSpaPlatform = ['workday', 'workable', 'greenhouse'].includes(result.platform);
+          const isSpaPlatform = isSpaPage(result.platform);
           if (!isSpaPlatform || attempt === maxRetries) {
-            await browser.runtime.sendMessage({
+            await safeSendMessage({
               type: 'PAGE_SCAN_RESULT',
               payload: { url: window.location.href, platform: result.platform, jobs: [], scannedAt: lastScanTime }
             });
@@ -354,6 +546,7 @@ export default defineContentScript({
         setPillState('error');
       } finally {
         isScanInProgress = false;
+        renderHudContent();
       }
     }
 
@@ -407,7 +600,7 @@ export default defineContentScript({
       
       if (result.jobs.length > 0) {
         // Will be updated by PAGE_SCAN_RESULT response via listener
-        await browser.runtime.sendMessage({
+        await safeSendMessage({
           type: 'PAGE_SCAN_RESULT',
           payload: { url: currentUrl, platform: result.platform, jobs: result.jobs, scannedAt: Date.now() }
         });
@@ -428,7 +621,7 @@ export default defineContentScript({
         });
       }
 
-      await browser.runtime.sendMessage({
+      await safeSendMessage({
         type: 'ADD_TRACKED_URL',
         payload: { url: currentUrl, platform: detectPlatform(currentUrl) }
       });
@@ -448,6 +641,9 @@ export default defineContentScript({
           <div class="hud-title" title="NEXTROLE · ${companyName}">NEXTROLE · ${companyName}</div>
           <button class="hud-close">&times;</button>
         </div>
+        <div style="padding: 12px 12px 0 12px;">
+          <button id="nr-scan-now-btn" class="btn-primary" style="margin-top: 0; background: transparent; color: #00f0ff; border-color: #00f0ff;">⚡ Scan Now</button>
+        </div>
         <div class="hud-body"></div>
         <div class="hud-footer"></div>
       `;
@@ -455,9 +651,18 @@ export default defineContentScript({
       hudBody = hudPanel.querySelector('.hud-body');
       hudFooter = hudPanel.querySelector('.hud-footer');
       hudPanel.querySelector('.hud-close')!.addEventListener('click', () => hudPanel?.classList.remove('open'));
+      
+      const scanBtn = hudPanel.querySelector('#nr-scan-now-btn') as HTMLButtonElement;
+      if (scanBtn) {
+        scanBtn.addEventListener('click', () => {
+          scanBtn.textContent = 'Scanning...';
+          scanBtn.disabled = true;
+          safeSendMessage({ type: 'MANUAL_SCAN' });
+        });
+      }
     }
 
-    function renderHudContent() {
+    async function renderHudContent() {
       if (!hudBody) return;
       hudBody.innerHTML = '';
 
@@ -475,6 +680,63 @@ export default defineContentScript({
       if (isScanInProgress) {
         hudBody.innerHTML = `<div class="hud-state"><div class="spinner-small" style="margin:0 auto 12px;"></div><h3>Scanning…</h3><p>Reading jobs from this page. Results will appear here shortly.</p></div>`;
         return;
+      }
+
+      // LinkedIn Job Alerts V1 - render from jobStore
+      try {
+        const store = await getJobStore();
+        if (store.jobs && store.jobs.length > 0) {
+          const jobs = store.jobs.sort((a, b) => b.detectedAt - a.detectedAt);
+          
+          let html = '';
+          for (const job of jobs) {
+            const ago = Math.floor((Date.now() - job.detectedAt) / 60000);
+            const timeText = ago === 0 ? 'Just now' : ago < 60 ? `${ago} min ago` : `${Math.floor(ago/60)} hrs ago`;
+            
+            let badgeColor = '#888';
+            if (job.matchScore >= 70) badgeColor = 'var(--green)';
+            else if (job.matchScore >= 40) badgeColor = 'var(--amber)';
+            
+            html += `
+              <div class="hud-job" style="border-left: 4px solid ${badgeColor};" data-apply="${job.applyUrl}" data-id="${job.id}">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                  <img src="${job.companyLogoUrl || 'https://www.google.com/s2/favicons?domain=linkedin.com&sz=32'}" style="width:24px;height:24px;border-radius:4px;background:#fff;" onerror="this.style.display='none'"/>
+                  <div class="hud-job-title" style="margin:0;">${job.role}</div>
+                </div>
+                <div class="hud-job-meta">
+                  <span>${job.company}</span>
+                  <span>· ${job.location}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                  <span style="font-size:10px; color:#555;">${timeText}</span>
+                  <div style="display:flex; gap:6px; align-items:center;">
+                    <span style="font-size:9px; background:${badgeColor}; color:#000; padding:2px 6px; font-weight:800; border:1px solid #000;">Score: ${job.matchScore}</span>
+                    <button class="nr-apply-btn" style="background:transparent; color:#00f0ff; border:1px solid #00f0ff; padding:2px 8px; font-size:10px; cursor:pointer;">Apply →</button>
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+          hudBody.innerHTML = html;
+          
+          // Add event listeners for apply buttons
+          const cards = hudBody.querySelectorAll('.hud-job');
+          cards.forEach(card => {
+            const btn = card.querySelector('.nr-apply-btn');
+            if (btn) {
+              btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const url = (card as HTMLElement).dataset.apply;
+                const id = (card as HTMLElement).dataset.id;
+                if (url) window.open(url, '_blank');
+                if (id) await markJobApplied(id);
+              });
+            }
+          });
+          return;
+        }
+      } catch (e) {
+        console.warn('Failed to load jobs from jobStore', e);
       }
 
       if (!isTracked) {
@@ -579,10 +841,59 @@ export default defineContentScript({
         browser.runtime.onMessage.addListener((msg: any) => {
           if (msg.type === 'NEW_JOBS_FOR_PAGE' && msg.payload.url === window.location.href) {
             cachedJobs = msg.payload.jobs;
-            setPillState('tracking-new', cachedJobs.filter(j => !j.seenAt).length);
+            setPillState('tracking-new', cachedJobs.filter((j: any) => !j.seenAt).length);
             renderHudContent();
           } else if (msg.type === 'TRIGGER_SCAN') {
             if (isTracked) runPageScanWithRetry();
+          } else if (msg.type === 'FETCH_COMPANY_JOBS') {
+            const { slug, name, logoUrl, companyId } = msg.payload as {
+              slug: string; name: string; logoUrl: string; companyId?: string
+            }
+
+            // [FIX-2B] Direct API fetch — does NOT navigate the tab
+            // The fetch intercept will catch this response automatically
+            const orgParam = companyId ? `urn%3Ali%3Aorganization%3A${companyId}` : slug
+            const voyagerUrl =
+              `https://www.linkedin.com/voyager/api/jobs/jobPostings` +
+              `?decorationId=com.linkedin.voyager.deco.jobs.web.shared.WebLimitedJobPosting-60` +
+              `&count=20&q=organization&organizationUrn=${orgParam}` +
+              `&start=0`
+
+            // Also try the company-specific jobs endpoint
+            const altUrl =
+              `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/` +
+              `?f_C=${slug}&start=0`
+
+            // Fire both — intercept will catch whichever returns job data
+            const csrfToken = document.cookie.match(/JSESSIONID="?([^";]+)"?/)?.[1] || '';
+
+            window.fetch(voyagerUrl, {
+              headers: {
+                'Accept': 'application/vnd.linkedin.normalized+json+2.1',
+                'x-li-lang': 'en_US',
+                'x-restli-protocol-version': '2.0.0',
+                'csrf-token': csrfToken,
+              },
+              credentials: 'include'  // uses user's LinkedIn session
+            }).catch(() => {})
+
+            window.fetch(altUrl, {
+              credentials: 'include'
+            }).catch(() => {})
+          } else if (msg.type === 'TRY_EXTRACT_COMPANIES') {
+            // [NEXTROLE-V1-NEW] handle TRY_EXTRACT_COMPANIES
+            if (typeof tryExtractAndSendCompanies === 'function') {
+              tryExtractAndSendCompanies();
+            }
+          } else if (msg.type === 'SCAN_COMPLETE') {
+            if (hudPanel) {
+              const scanBtn = hudPanel.querySelector('#nr-scan-now-btn') as HTMLButtonElement;
+              if (scanBtn) {
+                scanBtn.textContent = '⚡ Scan Now';
+                scanBtn.disabled = false;
+              }
+            }
+            renderHudContent();
           }
         });
       }

@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { getJobStore, saveJobStore, markJobSeen, markJobApplied } from '../../lib/jobStore';
 import {
   profileStorage,
   trackedPagesStorage,
@@ -328,7 +329,13 @@ async function loadWatchedPages() {
   const openTabs = await browser.tabs.query({});
   const openUrls = new Set(openTabs.map(t => t.url ? normalizeCareerUrl(t.url) : ''));
 
-  let html = '<div class="watched-list">';
+  let html = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding: 0 4px;">
+      <div style="font-weight: 800; font-size: 11px; letter-spacing: 1px; color: var(--muted);">TRACKED PAGES (${trackedPages.length})</div>
+      <button id="btn-scan-all-pages" class="btn-primary" style="padding: 4px 10px; font-size: 10px; border-radius: 4px;">⚡ SCAN ALL NOW</button>
+    </div>
+    <div class="watched-list">
+  `;
   for (const s of trackedPages) {
     const isOpen = openUrls.has(s.normalizedUrl);
     
@@ -403,6 +410,22 @@ async function loadWatchedPages() {
     });
   });
 
+  const scanAllBtn = $('btn-scan-all-pages');
+  if (scanAllBtn) {
+    scanAllBtn.addEventListener('click', () => {
+      browser.runtime.sendMessage({ type: 'MANUAL_SCAN' });
+      browser.runtime.sendMessage({ type: 'TRIGGER_SCAN_ALL' });
+      scanAllBtn.textContent = 'SCANNING...';
+      (scanAllBtn as HTMLButtonElement).disabled = true;
+      showToast('Global scan initiated!');
+      setTimeout(() => {
+        scanAllBtn.textContent = '⚡ SCAN ALL NOW';
+        (scanAllBtn as HTMLButtonElement).disabled = false;
+        loadWatchedPages();
+      }, 3000);
+    });
+  }
+
   const modal = $('search-builder-modal');
   const kwInput = $('sb-keywords') as HTMLInputElement;
   const locInput = $('sb-location') as HTMLInputElement;
@@ -450,45 +473,146 @@ function updateFeedBadge() {
   }
 }
 
-function loadFeed() {
+// [FIX-4D] Helper function
+function formatDetectedAt(detectedAt: number): string {
+  const diff = Date.now() - detectedAt;
+  if (diff < 60000) return 'Detected just now';
+  if (diff < 3600000) return `Detected ${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `Detected ${Math.floor(diff / 3600000)}h ago`;
+  return `Detected ${Math.floor(diff / 86400000)}d ago`;
+}
+
+async function loadFeed() {
   const container = $('feed-list-container');
   const markAllBtn = $('mark-all-btn');
-  let jobs = unseenJobs.filter(j => !j.dismissed && (!j.snoozedUntil || j.snoozedUntil < Date.now()));
+
+  // Load preferences for FIX-4A and nr_job_store for LinkedIn jobs
+  const storageData = await browser.storage.local.get(['nr_profile', 'monitorConfig', 'nr_job_store']);
+  const prof = storageData.nr_profile ?? {};
+  const mc = storageData.monitorConfig ?? {};
+  const prefRoles = ((prof.targetRoles as string[]) ?? (prof.preferredRoles as string[]) ?? (mc.roles as string[]) ?? []).filter(Boolean);
+  const prefLocs = ((prof.locations as string[]) ?? (prof.preferredLocations as string[]) ?? (mc.location ? [mc.location as string] : []) ?? []).filter(Boolean);
+  const followedComps = storageData.nr_job_store?.followedCompanies ?? [];
+  const linkedInJobs = storageData.nr_job_store?.jobs ?? [];
+
+  // Merge unseenJobs (ATS) with linkedInJobs (LinkedIn pipeline A)
+  let allJobs = [
+    ...unseenJobs.filter(j => !j.dismissed && (!j.snoozedUntil || j.snoozedUntil < Date.now())).map(j => ({ ...j, isATS: true })),
+    ...linkedInJobs.filter(j => j.status !== 'applied').map(j => ({
+      id: j.id,
+      title: j.role,
+      companyName: j.company,
+      location: j.location,
+      url: j.applyUrl,
+      sourceDomain: 'linkedin.com',
+      matchScore: j.matchScore,
+      matchReason: 'LinkedIn Match',
+      firstSeenAt: j.detectedAt,
+      seenAt: j.status === 'seen' ? 1 : null,
+      isATS: false,
+      status: j.status,
+      postedAtStr: j.postedAt,
+      detectedAt: j.detectedAt
+    }))
+  ];
 
   const now = Date.now();
   if (currentFeedFilter === 'today') {
     const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-    jobs = jobs.filter(j => j.firstSeenAt >= startOfDay.getTime());
+    allJobs = allJobs.filter(j => j.firstSeenAt >= startOfDay.getTime());
   } else if (currentFeedFilter === '7days') {
     const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-    jobs = jobs.filter(j => j.firstSeenAt >= weekAgo);
+    allJobs = allJobs.filter(j => j.firstSeenAt >= weekAgo);
+  } else if (currentFeedFilter === 'applied') {
+    allJobs = allJobs.filter(j => j.applicationStatus === 'applied' || j.status === 'applied');
+  } else if (currentFeedFilter === 'new') {
+    allJobs = allJobs.filter(j => !j.seenAt || j.status === 'new');
   }
 
-  if (jobs.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">📭</div>
-        No jobs match this filter.
+  // [FIX-4B] Sort order improvement
+  allJobs.sort((a, b) => {
+    // Primary: new first
+    const aNew = !a.seenAt || a.status === 'new';
+    const bNew = !b.seenAt || b.status === 'new';
+    if (aNew && !bNew) return -1;
+    if (bNew && !aNew) return 1;
+    // Secondary: higher score first
+    const scoreA = a.matchScore || 0;
+    const scoreB = b.matchScore || 0;
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    // Tertiary: most recent first
+    return b.firstSeenAt - a.firstSeenAt;
+  });
+
+  const hasUnseen = allJobs.some(j => !j.seenAt || j.status === 'new');
+  markAllBtn.style.display = hasUnseen ? 'block' : 'none';
+
+  let html = '';
+
+  // [FIX-4A] Active Criteria Display
+  if (prefRoles.length > 0 || prefLocs.length > 0) {
+    html += `
+      <div style="background: rgba(0,240,255,0.06); border: 1px solid rgba(0,240,255,0.15); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 11px; font-family: var(--mono);">
+        <div style="color: #7a9ab8; margin-bottom: 4px; letter-spacing: 0.08em; font-weight: bold;">SCANNING FOR</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+          ${prefRoles.map(role => `<span class="nr-tag" style="font-size: 10px; background: rgba(0,240,255,0.1); border: 1px solid rgba(0,240,255,0.2); border-radius: 4px; padding: 2px 6px;">${escapeHtml(role)}</span>`).join('')}
+          ${prefLocs.map(loc => `<span style="font-size: 10px; color: #00e676; background: rgba(0,230,118,0.08); border: 1px solid rgba(0,230,118,0.2); border-radius: 4px; padding: 2px 8px; font-family: var(--mono);">📍 ${escapeHtml(loc)}</span>`).join('')}
+        </div>
+        <button onclick="document.querySelectorAll('.tab-btn')[3].click()" style="margin-top: 6px; font-size: 10px; color: #7a9ab8; background: transparent; border: none; cursor: pointer; padding: 0; font-family: var(--mono); text-decoration: underline;">edit preferences →</button>
       </div>
     `;
+  } else {
+    html += `
+      <div style="background: rgba(255,214,0,0.06); border: 1px solid rgba(255,214,0,0.2); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 11px; color: #ffd600; font-family: var(--mono);">
+        ⚠ No roles set — all jobs will score 50%.
+        <button onclick="document.querySelectorAll('.tab-btn')[3].click()" style="color: #ffd600; background: transparent; border: none; cursor: pointer; padding: 0 0 0 4px; font-family: var(--mono); text-decoration: underline; font-size: 11px;">Set roles →</button>
+      </div>
+    `;
+  }
+
+  if (allJobs.length === 0) {
+    // [FIX-4C] Empty state
+    if (followedComps.length > 0) {
+      html += `
+        <div class="nr-card" style="text-align: center; padding: 24px 16px; background: var(--card); border: 2px solid var(--border); box-shadow: 3px 3px 0 #000;">
+          ${prefRoles.length === 0 ? `
+            <div style="font-size: 20px; margin-bottom: 8px;">⚙️</div>
+            <div style="font-size: 13px; color: var(--text); font-weight: 600;">Set your target roles first</div>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 6px;">NextRole needs to know what roles to watch for.</div>
+            <button onclick="document.querySelectorAll('.tab-btn')[3].click()" style="margin-top: 10px; padding: 6px 14px; font-size: 11px; font-family: var(--mono); color: #000; background: var(--cyan); border: 2px solid #000; border-radius: 0; box-shadow: 2px 2px 0 #000; cursor: pointer; font-weight: 800; text-transform: uppercase;">Open Settings →</button>
+          ` : `
+            <div style="font-size: 20px; margin-bottom: 8px;">🔍</div>
+            <div style="font-size: 13px; color: var(--text); font-weight: 600;">No matching jobs yet</div>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.6;">
+              Scanning ${followedComps.length} companies for ${escapeHtml(prefRoles.slice(0, 2).join(', '))}${prefRoles.length > 2 ? ` +${prefRoles.length - 2} more` : ''}.<br>NextRole auto-scans every 5 minutes.
+            </div>
+          `}
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="empty-state">
+          <div class="empty-icon">📭</div>
+          No jobs match this filter.
+        </div>
+      `;
+    }
+    container.innerHTML = html;
     markAllBtn.style.display = 'none';
     return;
   }
 
-  const hasUnseen = jobs.some(j => !j.seenAt);
-  markAllBtn.style.display = hasUnseen ? 'block' : 'none';
-
-  let html = '<div class="feed-list">';
-  for (const job of jobs) {
-    const ago = timeAgo(job.firstSeenAt);
+  html += '<div class="feed-list">';
+  for (const job of allJobs) {
+    const isNew = !job.seenAt || job.status === 'new';
     html += `
-      <div class="feed-card ${!job.seenAt ? 'unseen' : ''}" data-id="${job.id}" data-url="${escapeHtml(job.url)}">
+      <div class="feed-card ${isNew ? 'unseen' : ''}" data-id="${job.id}" data-url="${escapeHtml(job.url)}" data-isats="${job.isATS}">
         <div class="feed-card-header">
           <div class="feed-card-title">${escapeHtml(job.title)}</div>
           <div class="feed-actions">
-            <button class="btn-icon btn-snooze" data-id="${job.id}" title="Snooze 1 day">⏳</button>
-            <button class="btn-icon btn-apply" data-id="${job.id}" title="Mark applied">✅</button>
-            <button class="btn-icon btn-dismiss" data-id="${job.id}" title="Not interested">✕</button>
+            ${job.isATS ? `<button class="btn-icon btn-snooze" data-id="${job.id}" title="Snooze 1 day">⏳</button>` : ''}
+            <button class="btn-icon btn-apply" data-id="${job.id}" data-isats="${job.isATS}" title="Mark applied">✅</button>
+            ${job.isATS ? `<button class="btn-icon btn-dismiss" data-id="${job.id}" title="Not interested">✕</button>` : ''}
           </div>
         </div>
         <div class="feed-card-meta">
@@ -499,10 +623,11 @@ function loadFeed() {
         </div>
         <div style="display: flex; align-items: center; gap: 6px; margin-top: 8px;">
           ${job.matchScore ? `<span class="match-badge" style="background:${job.matchScore >= 80 ? 'var(--green)' : job.matchScore >= 60 ? 'var(--cyan)' : 'var(--amber)'};color:#000;">${job.matchScore >= 80 ? 'Strong Match' : job.matchScore >= 60 ? 'Good Match' : 'Partial Match'}</span>` : ''}
-          ${job.matchReason ? `<span class="match-badge" title="${escapeHtml(job.matchReason.replace(/,/g, '\\n'))}">${escapeHtml(job.matchReason.split(',')[0].replace('role:', 'Role: ').replace('company:', 'Company: '))}</span>` : ''}
-          <span class="time-label">${ago}</span>
+          <span class="time-label" title="${job.postedAtStr ? `Posted: ${job.postedAtStr}` : ''}">
+            ${formatDetectedAt(job.firstSeenAt)}
+          </span>
         </div>
-        ${!job.seenAt ? '<div class="new-dot"></div>' : ''}
+        ${isNew ? '<div class="new-dot"></div>' : ''}
       </div>
     `;
   }
@@ -510,13 +635,19 @@ function loadFeed() {
   container.innerHTML = html;
 
   container.querySelectorAll('.feed-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      // Ignore clicks on action buttons or source links
+    card.addEventListener('click', async (e) => {
       if ((e.target as HTMLElement).closest('.btn-icon') || (e.target as HTMLElement).closest('.btn-source-link')) return;
       const url = (card as HTMLElement).dataset.url!;
       const id = (card as HTMLElement).dataset.id!;
+      const isATS = (card as HTMLElement).dataset.isats === 'true';
       browser.tabs.create({ url });
-      browser.runtime.sendMessage({ type: 'MARK_JOB_SEEN', jobId: id });
+      
+      if (isATS) {
+        browser.runtime.sendMessage({ type: 'MARK_JOB_SEEN', jobId: id });
+      } else {
+        await markJobSeen(id);
+        loadFeed();
+      }
     });
   });
 
@@ -544,27 +675,34 @@ function loadFeed() {
   container.querySelectorAll('.btn-apply').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = (btn as HTMLElement).dataset.id!;
-      const jobs = await unseenJobsStorage.getValue() || [];
-      const updated = jobs.map(j => j.id === id ? { ...j, applicationStatus: 'applied', appliedAt: Date.now() } : j);
-      await unseenJobsStorage.setValue(updated as any);
+      const isATS = (btn as HTMLElement).dataset.isats === 'true';
+      if (isATS) {
+        const jobs = await unseenJobsStorage.getValue() || [];
+        const updated = jobs.map(j => j.id === id ? { ...j, applicationStatus: 'applied', appliedAt: Date.now() } : j);
+        await unseenJobsStorage.setValue(updated as any);
+      } else {
+        await markJobApplied(id);
+      }
       showToast('Marked as applied!');
       loadFeed();
     });
   });
 
-  // Event listener for status update (when currentFeedFilter === 'applied')
-  container.querySelectorAll('.status-select').forEach(sel => {
-    sel.addEventListener('change', async (e) => {
-      const id = (sel as HTMLElement).dataset.id!;
-      const val = (e.target as HTMLSelectElement).value;
-      const jobs = await unseenJobsStorage.getValue() || [];
-      const updated = jobs.map(j => j.id === id ? { ...j, applicationStatus: val } : j);
-      await unseenJobsStorage.setValue(updated as any);
-      loadFeed();
-    });
-  });
-
-  markAllBtn.onclick = () => browser.runtime.sendMessage({ type: 'MARK_ALL_SEEN' });
+  markAllBtn.onclick = async () => {
+    browser.runtime.sendMessage({ type: 'MARK_ALL_SEEN' });
+    
+    const store = await getJobStore();
+    let changed = false;
+    for (const job of store.jobs) {
+      if (job.status === 'new') {
+        job.status = 'seen';
+        changed = true;
+      }
+    }
+    if (changed) await saveJobStore(store);
+    
+    loadFeed();
+  };
 }
 
 // ────────────────────────────────────────────────────────

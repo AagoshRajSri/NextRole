@@ -21,6 +21,16 @@ import { getCompanyTrackingUrls } from '../lib/companyDirectory';
 import { calculateMatchScore, isCrossPlatformDuplicate } from '../lib/matchScoring';
 import { fireNotifications, getPendingNotification, clearPendingNotification } from '../lib/notificationManager';
 import { routeMessage } from '../lib/messageRouter';
+import { parseVoyagerResponse } from '../lib/voyagerParser';
+import { scoreJobAgainstProfile } from '../lib/matcher';
+// [NEXTROLE-V1-NEW]
+import { addJobs, getJobStore, saveJobStore, saveFollowedCompanies, getNewJobCount, clearOldJobs, markJobSeen, markJobApplied } from '../lib/jobStore';
+import type { JobCard, FollowedCompany } from '../lib/jobStore';
+
+const notificationLinks = new Map<string, string>();
+// [NEXTROLE-V1-NEW]
+const notificationJobMap = new Map<string, string>() // notifId → applyUrl
+let scanInProgress = false
 
 export default defineBackground(() => {
   const API_BASE = CONFIG.API_BASE_URL;
@@ -42,10 +52,18 @@ export default defineBackground(() => {
     try {
       const monitorState = await monitorStateStorage.getValue();
       const jobs = await unseenJobsStorage.getValue() || [];
-      const count = jobs.filter(j => !j.seenAt && !j.dismissed).length;
+      const atsCount = jobs.filter(j => !j.seenAt && !j.dismissed).length;
+      const liCount = await getNewJobCount();
+      const count = atsCount + liCount;
+
       if (!monitorState?.active) {
-        await browser.action.setBadgeText({ text: '—' });
-        await browser.action.setBadgeBackgroundColor({ color: '#5A7A9A' });
+        if (count > 0) {
+          await browser.action.setBadgeText({ text: count > 99 ? '99+' : String(count) });
+          await browser.action.setBadgeBackgroundColor({ color: '#00E5FF' });
+        } else {
+          await browser.action.setBadgeText({ text: '—' });
+          await browser.action.setBadgeBackgroundColor({ color: '#5A7A9A' });
+        }
         return;
       }
       if (count > 0) {
@@ -60,6 +78,27 @@ export default defineBackground(() => {
   // Notifications extracted to lib/notificationManager.ts
 
   browser.notifications.onButtonClicked.addListener(async (notifId, btnIdx) => {
+    // [NEXTROLE-V1-NEW] — inside existing onButtonClicked handler
+    const jobUrl = notificationJobMap.get(notifId)
+    if (jobUrl) {
+      browser.tabs.create({ url: jobUrl })
+      notificationJobMap.delete(notifId)
+      return;
+    }
+
+    if (notificationLinks.has(notifId)) {
+      if (btnIdx === 0) {
+        const url = notificationLinks.get(notifId)!;
+        await browser.tabs.create({ url, active: true });
+        
+        // Try to mark job seen
+        const jobId = notifId.replace('li-job-', '');
+        await markJobSeen(jobId);
+      }
+      browser.notifications.clear(notifId);
+      notificationLinks.delete(notifId);
+      return;
+    }
     if (notifId.startsWith('digest-')) { browser.action.openPopup?.().catch(() => {}); return; }
     try {
       const entry = await getPendingNotification(notifId);
@@ -88,6 +127,17 @@ export default defineBackground(() => {
   });
 
   browser.notifications.onClicked.addListener(async (notifId) => {
+    if (notificationLinks.has(notifId)) {
+      const url = notificationLinks.get(notifId)!;
+      await browser.tabs.create({ url, active: true });
+      
+      const jobId = notifId.replace('li-job-', '');
+      await markJobSeen(jobId);
+      
+      browser.notifications.clear(notifId);
+      notificationLinks.delete(notifId);
+      return;
+    }
     try {
       const entry = await getPendingNotification(notifId);
       if (entry?.jobUrl) {
@@ -298,8 +348,242 @@ export default defineBackground(() => {
     return results;
   }
 
+  // ── LINKEDIN SCAN ──
+  // [NEXTROLE-V1-NEW]
+  async function runLinkedInScan(forceRun: boolean): Promise<void> {
+    if (scanInProgress) {
+      console.log('[NextRole:Scan] Scan already in progress, skipping')
+      return
+    }
+
+    const store = await getJobStore()
+
+    // Rate limit: skip if scanned within last 60 seconds (unless forced)
+    if (!forceRun && store.lastScannedAt !== null) {
+      const secondsSinceLast = (Date.now() - store.lastScannedAt) / 1000
+      if (secondsSinceLast < 60) {
+        console.log(`[NextRole:Scan] Rate limited — ${secondsSinceLast.toFixed(0)}s since last scan`)
+        return
+      }
+    }
+
+    // Require a LinkedIn tab to be open
+    const linkedInTabs = await browser.tabs.query({ url: '*://*.linkedin.com/*' })
+    if (linkedInTabs.length === 0) {
+      console.log('[NextRole:Scan] No LinkedIn tab open, skipping')
+      return
+    }
+
+    if (store.followedCompanies.length === 0) {
+      console.log('[NextRole:Scan] No followed companies loaded yet')
+      // Notify the LinkedIn tab to try extracting companies
+      for (const tab of linkedInTabs) {
+        if (tab.id) {
+          browser.tabs.sendMessage(tab.id, { type: 'TRY_EXTRACT_COMPANIES' })
+            .catch(() => {}) // tab may not have content script
+        }
+      }
+      return
+    }
+
+    // [FIX-3] Read preferences from both storage keys, merge
+    const storage = await browser.storage.local.get(['monitorConfig', 'nr_profile'])
+    const profile = storage.nr_profile ?? {}
+    const monitorConfig = storage.monitorConfig ?? {}
+
+    const preferredRoles: string[] = (
+      (profile.targetRoles as string[]) ??
+      (profile.preferredRoles as string[]) ??
+      (monitorConfig.roles as string[]) ??
+      []
+    ).filter(Boolean)
+
+    const preferredLocations: string[] = (
+      (profile.locations as string[]) ??
+      (profile.preferredLocations as string[]) ??
+      (monitorConfig.location ? [monitorConfig.location as string] : []) ??
+      []
+    ).filter(Boolean)
+
+    
+    // [NEXTROLE-FIX-B3] Touch storage to prevent SW from sleeping mid-scan
+    const keepAliveInterval = setInterval(async () => {
+      await browser.storage.local.set({ _nr_sw_ping: Date.now() })
+    }, 20000) // every 20s during scan
+scanInProgress = true
+    await browser.storage.local.set({ nr_scanning: true })
+
+    try {
+      const linkedInTab = linkedInTabs[0]
+      if (!linkedInTab.id) return
+
+      // Chunk companies to avoid rate limit (scan max 8 companies per 5-minute cycle)
+      const MAX_COMPANIES_PER_CYCLE = 8;
+      const companiesToScan = [...store.followedCompanies]
+        .sort((a, b) => (a.lastScannedAt || 0) - (b.lastScannedAt || 0))
+        .slice(0, MAX_COMPANIES_PER_CYCLE);
+
+      console.log(`[NextRole:Scan] Scanning ${companiesToScan.length} companies out of ${store.followedCompanies.length}`);
+
+      for (const company of companiesToScan) {
+        // Jitter: 2-5 seconds between companies to emulate human behavior
+        const jitter = Math.random() * 3000 + 2000
+        await new Promise(resolve => setTimeout(resolve, jitter))
+
+        try {
+          await browser.tabs.sendMessage(linkedInTab.id, {
+            type: 'FETCH_COMPANY_JOBS',
+            payload: { slug: company.slug, name: company.name, logoUrl: company.logoUrl, companyId: company.companyId }
+          })
+          
+          // Update individual company lastScannedAt immediately to ensure rotation even if scan is interrupted
+          const updatedStore = await getJobStore();
+          const index = updatedStore.followedCompanies.findIndex(c => c.slug === company.slug);
+          if (index !== -1) {
+            updatedStore.followedCompanies[index].lastScannedAt = Date.now();
+            await saveJobStore(updatedStore);
+          }
+        } catch (err) {
+          console.log(`[NextRole:Scan] Could not message tab for ${company.slug}:`, err)
+        }
+      }
+
+      // Update overall lastScannedAt
+      const finalStore = await getJobStore()
+      finalStore.lastScannedAt = Date.now()
+      await saveJobStore(finalStore) 
+
+      // Clean old jobs
+      await clearOldJobs()
+
+    } finally {
+      clearInterval(keepAliveInterval)
+      scanInProgress = false
+      await browser.storage.local.set({ nr_scanning: false })
+
+      // Notify popup to refresh
+      browser.runtime.sendMessage({ type: 'SCAN_COMPLETE' }).catch(() => {})
+
+      // Update badge
+      await updateBadge()
+    }
+  }
+
   // ── MESSAGING ──
   browser.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
+    // LinkedIn feature handlers
+    if (message.type === 'ONBOARDING_COMPLETE') {
+      logger.info('onboarding', 'Onboarding complete, setting up alarm');
+      browser.alarms.create('LINKEDIN_PAGES_SCAN', { periodInMinutes: 5 });
+      return true;
+    }
+    
+    // [NEXTROLE-V1-NEW] — LinkedIn Pages slug update from content script
+    if (message.type === 'UPDATE_FOLLOWED_COMPANIES') {
+      (async () => {
+        const companies: FollowedCompany[] = message.payload ?? []
+        if (companies.length > 0) {
+          await saveFollowedCompanies(companies)
+          console.log(`[NextRole:BG] Saved ${companies.length} followed companies`)
+        }
+        sendResponse({ success: true })
+      })();
+      return true;
+    }
+
+    // [NEXTROLE-V1-NEW] — Voyager API data intercepted by content script
+    if (message.type === 'VOYAGER_JOB_DATA') {
+      (async () => {
+        const { rawJson, companySlug, companyName, companyLogoUrl } = message.payload
+        // [FIX-3] Read preferences from both storage keys, merge
+        const storage = await browser.storage.local.get(['monitorConfig', 'nr_profile'])
+        const profile = storage.nr_profile ?? {}
+        const monitorConfig = storage.monitorConfig ?? {}
+
+        const preferredRoles: string[] = (
+          (profile.targetRoles as string[]) ??
+          (profile.preferredRoles as string[]) ??
+          (monitorConfig.roles as string[]) ??
+          []
+        ).filter(Boolean)
+
+        const preferredLocations: string[] = (
+          (profile.locations as string[]) ??
+          (profile.preferredLocations as string[]) ??
+          (monitorConfig.location ? [monitorConfig.location as string] : []) ??
+          []
+        ).filter(Boolean)
+
+        // [FIX-5] Enrich company info
+        const store = await getJobStore()
+        const knownCompany = store.followedCompanies.find(
+          c => c.slug === companySlug || c.companyId === companySlug
+        )
+        const enrichedCompanyName = knownCompany?.name ?? companyName
+        const enrichedCompanyLogoUrl = knownCompany?.logoUrl ?? companyLogoUrl
+
+        // Parse Voyager response
+        const parsed = parseVoyagerResponse(rawJson, companySlug, enrichedCompanyName, enrichedCompanyLogoUrl)
+        if (parsed.length === 0) { sendResponse({ success: true }); return; }
+
+        // Score and filter
+        const scored = parsed
+          .map(job => ({
+            ...job,
+            matchScore: scoreJobAgainstProfile(
+              job.role, job.location, preferredRoles, preferredLocations
+            ),
+            detectedAt: Date.now()
+          }))
+          .filter(job => job.matchScore > 0)
+
+        if (scored.length === 0) { sendResponse({ success: true }); return; }
+
+        // Add to store — get back only the genuinely new ones
+        const newJobs = await addJobs(scored)
+        if (newJobs.length === 0) { sendResponse({ success: true }); return; }
+
+        console.log(`[NextRole:BG] ${newJobs.length} new jobs from ${companyName}`)
+
+        // Fire a notification for each new job (cap at 3 per scan to avoid spam)
+        const toNotify = newJobs.slice(0, 3)
+        for (const job of toNotify) {
+          const notifId = `nr-job-${job.id}-${Date.now()}`
+          notificationJobMap.set(notifId, job.applyUrl)
+
+          browser.notifications.create(notifId, {
+            type: 'basic',
+            iconUrl: job.companyLogoUrl || browser.runtime.getURL('/icon/128.png'),
+            title: `New job at ${job.company}`,
+            message: `${job.role} · ${job.location}`,
+            buttons: [{ title: 'View Job →' }]
+          })
+        }
+
+        if (newJobs.length > 3) {
+          browser.notifications.create(`nr-batch-${Date.now()}`, {
+            type: 'basic',
+            iconUrl: browser.runtime.getURL('/icon/128.png'),
+            title: `${newJobs.length} new matching jobs found`,
+            message: `Open NextRole to view all matches`
+          })
+        }
+
+        // Update badge
+        await updateBadge()
+
+        sendResponse({ success: true })
+      })();
+      return true;
+    }
+
+    // [NEXTROLE-V1-NEW] — Manual scan trigger from popup
+    if (message.type === 'MANUAL_SCAN') {
+      runLinkedInScan(true).catch(console.error) // forceRun = true
+      sendResponse({ success: true })
+      return true;
+    }
+
     const deps = {
       storageLock,
       getUserId,
@@ -322,6 +606,11 @@ export default defineBackground(() => {
   browser.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name.startsWith('notif-keepalive-')) { browser.alarms.clear(alarm.name); return; }
     if (alarm.name === DAILY_PRUNE) { await pruneOldJobs(); return; }
+    // [NEXTROLE-V1-NEW]
+    if (alarm.name === 'LINKEDIN_PAGES_SCAN') { 
+      await runLinkedInScan(false); // false = respect rate limit
+      return; 
+    }
     if (alarm.name !== POLL_ALARM) return;
 
     const ms = await monitorStateStorage.getValue();
@@ -517,12 +806,83 @@ export default defineBackground(() => {
     const ms = await monitorStateStorage.getValue();
     if (ms?.active) browser.alarms.create(POLL_ALARM, { periodInMinutes: 15 });
     browser.alarms.create(DAILY_PRUNE, { periodInMinutes: 1440 });
+    // [NEXTROLE-V1-NEW]
+    // FREE TIER: 5-minute scan cycle
+    // PREMIUM TODO: replace with real-time Voyager WebSocket intercept (V2)
+    browser.alarms.create('LINKEDIN_PAGES_SCAN', { periodInMinutes: 5 });
     await updateBadge();
     upgradeSortParams().catch(err => logger.warn('startup', 'upgradeSortParams failed', err));
     syncRemoteSelectors().catch(err => logger.warn('startup', 'syncRemoteSelectors failed', err));
     syncSessionCookies().catch(err => logger.warn('startup', 'syncSessionCookies failed', err));
     connectSocket().catch(err => logger.warn('startup', 'connectSocket failed', err));
   };
-  browser.runtime.onStartup.addListener(setupAlarms);
-  browser.runtime.onInstalled.addListener(setupAlarms);
+  browser.runtime.onStartup.addListener(async () => {
+    await setupAlarms();
+    // [NEXTROLE-DEBUG] Remove after confirming fix works
+    const tabs = await browser.tabs.query({ url: 'https://www.linkedin.com/mynetwork/*' })
+    console.log('[NextRole:BG] LinkedIn mynetwork tabs on startup:', tabs.length)
+  });
+
+  browser.runtime.onInstalled.addListener(async () => {
+    await setupAlarms();
+    // [NEXTROLE-FIX] Inject content script into any already-open LinkedIn tabs
+    // on extension install/update — handles tabs open before extension loaded
+    try {
+      const linkedInTabs = await browser.tabs.query({
+        url: 'https://www.linkedin.com/*'
+      })
+      for (const tab of linkedInTabs) {
+        if (!tab.id) continue
+        try {
+          await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['content-scripts/content.js']
+          })
+          console.log('[NextRole:BG] Injected content script into existing tab:', tab.url)
+        } catch {
+          // Tab may not allow injection (chrome:// pages etc) — skip silently
+        }
+      }
+    } catch (err) {
+      console.warn('[NextRole:BG] Could not inject into existing tabs:', err)
+    }
+  });
+
+// [NEXTROLE-FIX-B3] Keep service worker alive while LinkedIn tabs are open
+browser.tabs.onActivated.addListener(async (activeInfo) => {
+  try {
+    const tab = await browser.tabs.get(activeInfo.tabId)
+    if (tab.url?.includes('linkedin.com')) {
+      await browser.storage.local.set({ _nr_sw_heartbeat: Date.now() })
+    }
+  } catch {}
+})
+
+browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url?.includes('linkedin.com')) {
+    await browser.storage.local.set({ _nr_sw_heartbeat: Date.now() })
+  }
+  // [NEXTROLE-FIX] Re-inject on LinkedIn SPA navigation to mynetwork pages
+  if (
+    changeInfo.status === 'complete' &&
+    tab.url?.includes('linkedin.com/mynetwork')
+  ) {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId },
+        files: ['content-scripts/content.js']
+      })
+    } catch {
+      // Already injected or not allowed — ignore
+    }
+  }
+})
+  // Update badge on storage changes
+  browser.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local') {
+      if (changes['nr_job_store'] || changes['local:unseenJobs'] || changes['local:monitorState']) {
+        updateBadge().catch(() => {});
+      }
+    }
+  });
 });

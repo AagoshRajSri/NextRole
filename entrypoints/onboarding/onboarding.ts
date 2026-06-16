@@ -378,6 +378,21 @@ function showWizard() {
 }
 
 function initWizard() {
+  // Populate form fields with draft data
+  const nameInput = document.getElementById('ob-name') as HTMLInputElement;
+  if (nameInput) nameInput.value = profileData.name || '';
+  const phoneInput = document.getElementById('ob-phone') as HTMLInputElement;
+  if (phoneInput) phoneInput.value = profileData.phone || '';
+  const emailInput = document.getElementById('ob-email') as HTMLInputElement;
+  if (emailInput) emailInput.value = profileData.email || '';
+  const linkedinInput = document.getElementById('ob-linkedin') as HTMLInputElement;
+  if (linkedinInput) linkedinInput.value = profileData.linkedinUrl || '';
+
+  const emailRow = document.getElementById('email-toggle-row');
+  if (emailRow) emailRow.style.display = (profileData.email || '').includes('@') ? 'flex' : 'none';
+  const emailToggle = document.getElementById('toggle-email');
+  if (emailToggle) emailToggle.classList.toggle('on', !!profileData.emailAlerts);
+
   renderStepDots();
   updateStepVisibility();
   setupTagInputs();
@@ -440,16 +455,47 @@ function updateStepVisibility() {
   validateCurrentStep();
 }
 
-function handleNext() {
+async function saveDraft() {
+  try {
+    const now = Date.now();
+    const draftProfile: UserProfile = {
+      name: profileData.name || '',
+      phone: profileData.phone || '',
+      email: profileData.email || '',
+      linkedinUrl: profileData.linkedinUrl || '',
+      targetRoles: profileData.targetRoles,
+      locations: profileData.locations,
+      watchlistCompanies: profileData.watchlistCompanies,
+      experienceLevel: profileData.experienceLevel || 'fresher',
+      alertMode: profileData.alertMode as any || 'instant',
+      emailAlerts: !!profileData.emailAlerts,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      isOnboarded: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await profileStorage.setValue(draftProfile);
+  } catch (err) {
+    console.warn('Failed to save onboarding draft', err);
+  }
+}
+
+async function handleNext() {
   if (currentStep < totalSteps) {
     saveCurrentStepData();
+    await saveDraft();
     currentStep++;
     updateStepVisibility();
   }
 }
 
-function handleBack() {
-  if (currentStep > 1) { currentStep--; updateStepVisibility(); }
+async function handleBack() {
+  if (currentStep > 1) {
+    saveCurrentStepData();
+    await saveDraft();
+    currentStep--;
+    updateStepVisibility();
+  }
 }
 
 function validateCurrentStep() {
@@ -461,6 +507,7 @@ function saveCurrentStepData() {
   if (currentStep === 1) {
     profileData.name = (document.getElementById('ob-name') as HTMLInputElement)?.value || '';
     profileData.phone = (document.getElementById('ob-phone') as HTMLInputElement)?.value || '';
+    profileData.email = (document.getElementById('ob-email') as HTMLInputElement)?.value || '';
     profileData.linkedinUrl = (document.getElementById('ob-linkedin') as HTMLInputElement)?.value || '';
   }
 }
@@ -497,6 +544,7 @@ function setupTagInputs() {
         pill.querySelector('.tag-x')!.addEventListener('click', () => {
           arr.splice(arr.indexOf(val), 1);
           renderTags(); validateCurrentStep();
+          saveDraft();
         });
         wrap.insertBefore(pill, input);
       });
@@ -505,7 +553,7 @@ function setupTagInputs() {
 
     const addTag = (val: string) => {
       const clean = val.trim();
-      if (clean && !arr.includes(clean)) { arr.push(clean); renderTags(); validateCurrentStep(); }
+      if (clean && !arr.includes(clean)) { arr.push(clean); renderTags(); validateCurrentStep(); saveDraft(); }
       input.value = '';
     };
 
@@ -514,25 +562,33 @@ function setupTagInputs() {
     });
     suggs.forEach(s => s.addEventListener('click', () => addTag(s.getAttribute('data-val')!)));
     wrap.addEventListener('click', () => input.focus());
+
+    renderTags(); // Ensure prefilled tags are rendered on load
   });
 }
 
 function setupRadioPills() {
   document.querySelectorAll('.radio-pill').forEach(p => {
+    const val = p.getAttribute('data-val');
+    p.classList.toggle('active', val === profileData.experienceLevel);
     p.addEventListener('click', () => {
       document.querySelectorAll('.radio-pill').forEach(x => x.classList.remove('active'));
       p.classList.add('active');
-      profileData.experienceLevel = (p as HTMLElement).getAttribute('data-val') as any || 'fresher';
+      profileData.experienceLevel = val as any || 'fresher';
+      saveDraft();
     });
   });
 }
 
 function setupAlertCards() {
   document.querySelectorAll('.radio-card').forEach(c => {
+    const val = c.getAttribute('data-alert');
+    c.classList.toggle('active', val === profileData.alertMode);
     c.addEventListener('click', () => {
       document.querySelectorAll('.radio-card').forEach(x => x.classList.remove('active'));
       c.classList.add('active');
-      profileData.alertMode = (c as HTMLElement).getAttribute('data-alert') as any || 'instant';
+      profileData.alertMode = val as any || 'instant';
+      saveDraft();
     });
   });
 }

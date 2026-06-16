@@ -153,7 +153,7 @@ function scrapeLinkedInDOM(doc: Document, url: string, selectors?: any): { jobs:
   }
 
   // Strategy 3: company jobs page layout (.jobs-search__results-list li)
-  const listSelector = selectors?.strategyB || '.jobs-search__results-list li, .scaffold-layout__list-container li';
+  const listSelector = selectors?.strategyB || '.jobs-search-results__list-item, .jobs-search__results-list li, .scaffold-layout__list-container li';
   const listTitleSel = selectors?.title || 'h3, .base-search-card__title, strong';
   const listCompSel = selectors?.company || 'h4, .base-search-card__subtitle';
   const listLocSel = selectors?.location || '[class*="location"], [class*="Location"]';
