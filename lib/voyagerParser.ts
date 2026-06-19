@@ -42,6 +42,7 @@ export function parseVoyagerResponse(
     // Structure A & C
     if (Array.isArray(obj.elements)) {
       for (const el of obj.elements) {
+        if (!el) continue;
         // Structure A
         if (el.jobCardUnion?.jobPostingCard) {
           const card = el.jobCardUnion.jobPostingCard;

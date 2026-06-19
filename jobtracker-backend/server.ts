@@ -47,14 +47,20 @@ app.use('/resumes', express.static(path.join(__dirname, 'public/resumes')));
 // ────────────────────────────────────────────────────────
 const allowedOrigins = [
   process.env.ALLOWED_ORIGINS || '',
-  ...(process.env.NODE_ENV === 'development' ? ['chrome-extension://fakeextensionidfordev'] : []),
+  process.env.FRONTEND_URL || '',
 ].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (origin.startsWith('chrome-extension://')) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (!origin) return callback(null, true); // Allow non-browser clients (e.g. mobile)
+    if (
+      origin.startsWith('chrome-extension://') ||
+      origin.startsWith('http://localhost:') ||
+      origin.startsWith('http://127.0.0.1:') ||
+      allowedOrigins.includes(origin)
+    ) {
+      return callback(null, true);
+    }
     callback(new Error(`CORS: origin ${origin} not allowed`));
   },
   credentials: false,
@@ -232,10 +238,19 @@ let redisSubscriber: Redis | null = null;
 
 try {
   const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  connection.on('error', (err) => {
+    // Suppress unhandled error events
+  });
   monitorQueue = new Queue('monitorQueue', { connection });
+  monitorQueue.on('error', (err) => {
+    // Suppress Queue connection errors
+  });
   console.log('[Server] Connected to Redis for BullMQ.');
 
   redisSubscriber = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  redisSubscriber.on('error', (err) => {
+    // Suppress unhandled error events
+  });
   redisSubscriber.subscribe('jobAlerts', (err) => {
     if (err) console.error('[Server] Failed to subscribe to jobAlerts', err);
     else console.log('[Server] Subscribed to Redis jobAlerts channel.');
@@ -495,37 +510,9 @@ app.post('/api/jobs/bulk', validate(JobBulkSchema), async (req, res) => {
 // ════════════════════════════════════════════════════════
 // EMAIL ALERTS (Client-Side Trigger)
 // ════════════════════════════════════════════════════════
-import { Resend } from 'resend';
-const resend = new Resend(process.env.RESEND_API_KEY || 're_dummy');
-
 app.post('/api/alerts/email', async (req, res) => {
-  const userId = getUserId(req);
-  const { jobId, jobTitle, companyName, jobUrl, matchReason } = req.body;
-  
-  if (!jobId || !jobTitle || !jobUrl) return res.status(400).json({ error: 'Missing job details' });
-
-  try {
-    if (redisSubscriber) {
-      const key = `email_sent:${userId}:${jobId}`;
-      const alreadySent = await redisSubscriber.get(key);
-      if (alreadySent) return res.status(429).json({ error: 'Email already sent for this job' });
-      await redisSubscriber.set(key, '1', 'EX', 86400 * 30);
-    }
-
-    if (process.env.RESEND_API_KEY) {
-      await resend.emails.send({
-        from: 'NextRole Alerts <alerts@nextrole.com>',
-        to: 'user@example.com', // Normally fetched from User profile
-        subject: `New Match: ${jobTitle} at ${companyName || 'Unknown'}`,
-        html: `<h2>NextRole Found a Match</h2><p><strong>${jobTitle}</strong> at ${companyName || 'Unknown'}</p><p>Match Reason: ${matchReason || 'Profile Match'}</p><a href="${jobUrl}">View Job</a>`
-      });
-    } else {
-      console.log('[Server] Mock Email Alert:', { jobId, jobTitle, companyName });
-    }
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+  // Email alerting disabled per user request
+  res.json({ success: true, message: 'Email alerts temporarily disabled.' });
 });
 
 // ════════════════════════════════════════════════════════
@@ -756,83 +743,18 @@ protectedRouter.post('/cookies', cookieSyncLimiter, async (req, res) => {
 
 const FREE_TIER_MAX_RUNS = 5;
 
-async function verifyTokenBudget(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const userId = getUserId(req);
-  try {
-    const user = await prisma.userProfile.findUnique({ where: { userId } });
-    if (!user) return res.status(404).json({ error: 'User profile not found.' });
-    if (!user.isPremium && user.monthlyRunsUsed >= FREE_TIER_MAX_RUNS) {
-      return res.status(402).json({
-        error: 'TOKEN_LIMIT_EXCEEDED',
-        message: 'You have reached your 5 free AI runs. Upgrade to Premium for unlimited.',
-      });
-    }
-    await prisma.userProfile.update({
-      where: { userId },
-      data: { monthlyRunsUsed: { increment: 1 } },
-    });
-    next();
-  } catch {
-    res.status(500).json({ error: 'Internal error verifying limits.' });
-  }
+// AI Tailoring disabled per user request
+app.post('/api/resumes/tailor', (req, res) => res.status(501).json({ error: 'AI Tailoring disabled.' }));
+app.get('/api/resumes/lookup', (req, res) => res.status(501).json({ error: 'AI Tailoring disabled.' }));
+app.get('/api/resumes/:jobId', (req, res) => res.status(501).json({ error: 'AI Tailoring disabled.' }));
+
+export { app, httpServer };
+
+if (process.env.NODE_ENV !== 'test') {
+  const PORT = process.env.PORT || 5000;
+  httpServer.listen(PORT, () => {
+    console.log(`\n🚀 NextRole Backend Running on http://localhost:${PORT}`);
+    console.log(`- API endpoints: http://localhost:${PORT}/api/*`);
+    console.log(`- Socket.io Telemetry Active`);
+  });
 }
-
-app.post('/api/resumes/tailor', verifyTokenBudget, async (req, res) => {
-  const userId = getUserId(req);
-  const { jobSnapshotId, companyName } = req.body;
-  if (!jobSnapshotId || !companyName) {
-    return res.status(400).json({ error: 'jobSnapshotId and companyName are required.' });
-  }
-  try {
-    const jobSnapshot = await prisma.jobSnapshot.findUnique({ where: { id: jobSnapshotId } });
-    if (!jobSnapshot) return res.status(404).json({ error: 'Job snapshot not found.' });
-    if (monitorQueue) {
-      await monitorQueue.add('resume-tailoring', { userId, company: companyName, jobSnapshot });
-      return res.status(202).json({ message: 'Resume tailoring queued.' });
-    }
-    res.status(503).json({ error: 'Queue not active.' });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/resumes/lookup', async (req, res) => {
-  const url = req.query.url as string;
-  const userId = getUserId(req);
-  if (!url) return res.status(400).json({ error: 'URL required.' });
-  try {
-    const snapshot = await prisma.jobSnapshot.findFirst({
-      where: { url: { contains: url }, trackedSearch: { userId } },
-      include: { tailoredResumes: { orderBy: { createdAt: 'desc' }, take: 1 } },
-    });
-    if (!snapshot || snapshot.tailoredResumes.length === 0) {
-      return res.status(404).json({ error: 'No tailored resume found.' });
-    }
-    res.json({ snapshot, resume: snapshot.tailoredResumes[0] });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/resumes/:jobId', async (req, res) => {
-  try {
-    const resume = await prisma.tailoredResume.findFirst({
-      where: { jobSnapshotId: req.params.jobId },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!resume) return res.status(404).json({ error: 'Resume not found.' });
-    res.json(resume);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ════════════════════════════════════════════════════════
-// START SERVER
-// ════════════════════════════════════════════════════════
-const PORT = process.env.PORT || 5000;
-httpServer.listen(PORT, () => {
-  console.log(`\n🚀 NextRole Backend Running on http://localhost:${PORT}`);
-  console.log(`- API endpoints: http://localhost:${PORT}/api/*`);
-  console.log(`- Socket.io Telemetry Active`);
-});

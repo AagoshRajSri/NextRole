@@ -106,7 +106,10 @@ export function calculateMatchScore(job: JobCandidate, profile: MatchProfile): M
   } else if (isRemote && hasRemote) {
     score += 20;
     breakdown.locationMatch = { matched: true, location: 'Remote' };
-  } else if (locs.some(l => location.includes(l.toLowerCase()))) {
+  } else if (locs.some(l => {
+    const term = l.toLowerCase();
+    return location.includes(term) || term.includes(location) && location.length > 2;
+  })) {
     score += 20;
     breakdown.locationMatch = { matched: true, location };
   }

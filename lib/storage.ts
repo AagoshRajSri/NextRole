@@ -93,9 +93,6 @@ export const dismissedJobIdsStorage = storage.defineItem<string[]>('local:dismis
   fallback: [],
 });
 
-export const appliedJobsStorage = storage.defineItem<StoredJob[]>('local:appliedJobs', {
-  fallback: [],
-});
 
 export const remoteSelectorsStorage = storage.defineItem<Record<string, any>>('local:remoteSelectors', {
   fallback: {},

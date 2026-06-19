@@ -2,6 +2,7 @@
 // CLIENT-SIDE DOM JOB SCRAPER
 // Extracts jobs directly from the page DOM in the content script.
 // ────────────────────────────────────────────────────────
+import { detectPlatform, extractCompanyFromUrl } from './utils';
 
 export interface ScrapedJob {
   atsJobId: string;
@@ -20,44 +21,7 @@ export interface ClientScrapeResult {
   durationMs: number;
 }
 
-export function detectPlatform(url: string): string {
-  try {
-    const { hostname: host, pathname: path } = new URL(url)
-    const h = host.toLowerCase()
-    const p = path.toLowerCase()
-    
-    if (h.includes('greenhouse.io') || h.includes('boards.greenhouse.io')) return 'greenhouse'
-    if (h.includes('lever.co')) return 'lever'
-    if (h.includes('myworkdayjobs.com') || (h.includes('workday.com') && p.includes('jobs'))) return 'workday'
-    if (h.includes('ashbyhq.com')) return 'ashby'
-    if (h.includes('wellfound.com') || h.includes('angel.co')) return 'wellfound'
-    if (h.includes('workable.com') || h.includes('apply.workable.com')) return 'workable'
-    if (h.includes('smartrecruiters.com')) return 'smartrecruiters'
-    if (h === 'amazon.jobs') return 'amazon_jobs'
-    if (h.includes('naukri.com')) return 'naukri'
-    if (h.includes('instahyre.com')) return 'instahyre'
-    if (h.includes('linkedin.com')) return 'linkedin'
-    
-    if (h.includes('eightfold.ai')) return 'eightfold'
-    if (h.includes('taleo.net')) return 'taleo'
-    if (h.includes('icims.com')) return 'icims'
-    if (h.includes('successfactors.com') || h.includes('successfactors.eu')) return 'successfactors'
-    if (h.includes('jobvite.com')) return 'jobvite'
-    if (h.includes('brassring.com') || h.includes('kenexa.com')) return 'brassring'
-    if (h.includes('myworkday.com')) return 'workday'
-    if (h.includes('ultipro.com') || h.includes('ukg.com')) return 'ultipro'
-    
-    if (h === 'careers.google.com' || (h.includes('google.com') && p.includes('/careers'))) return 'google'
-    if (h.includes('microsoft.com') && (h.includes('eightfold') || p.includes('careers'))) return 'eightfold'
-    if (h.includes('apple.com') && p.includes('job')) return 'generic'
-    if (h.includes('meta.com') && p.includes('careers')) return 'generic'
-    
-    if (h.startsWith('careers.') || h.startsWith('jobs.')) return 'generic'
-    if (p.includes('/careers') || p.includes('/jobs')) return 'generic'
-    
-    return 'generic'
-  } catch { return 'generic' }
-}
+
 export function scrapeCurrentPage(doc: Document, url: string, remoteSelectors: Record<string, any> = {}): ClientScrapeResult {
   const start = performance.now();
   const platform = detectPlatform(url);
@@ -79,6 +43,7 @@ export function scrapeCurrentPage(doc: Document, url: string, remoteSelectors: R
     case 'successfactors':  result = scrapeSuccessFactorsDOM(doc, url); break;
     case 'jobvite':         result = scrapeJobviteDOM(doc, url); break;
     case 'amazon_jobs':     result = scrapeAmazonJobsDOM(doc, url); break;
+    case 'phenom':          result = scrapePhenomDOM(doc, url); break;
     default:                result = scrapeGenericCompanyCareerDOM(doc, url);
   }
 
@@ -603,23 +568,7 @@ function deduplicateByTitle(jobs: ScrapedJob[]): ScrapedJob[] {
   });
 }
 
-export function extractCompanyFromUrl(url: string): string {
-  try {
-    const host = new URL(url).hostname.replace('www.', '');
-    const path = new URL(url).pathname;
-    if (host.includes('linkedin.com')) {
-      const match = path.match(/\/company\/([^/]+)/);
-      return match?.[1]?.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || '';
-    }
-    if (host.includes('greenhouse.io')) return path.split('/')[1]?.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || '';
-    if (host.includes('lever.co')) return path.split('/')[1]?.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || '';
-    if (host.includes('ashbyhq.com')) return path.split('/')[1]?.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || '';
-    if (host.startsWith('careers.') || host.startsWith('jobs.')) {
-      return host.split('.')[1]?.replace(/\b\w/g, l => l.toUpperCase()) || '';
-    }
-    return host.split('.')[0]?.replace(/\b\w/g, l => l.toUpperCase()) || '';
-  } catch { return ''; }
-}
+
 
 function scrapeWellfoundDOM(doc: Document, url: string) { return scrapeGenericCompanyCareerDOM(doc, url); }
 function scrapeWorkableDOM(doc: Document, url: string) { return scrapeGenericCompanyCareerDOM(doc, url); }
@@ -989,7 +938,7 @@ function scrapeAmazonJobsDOM(doc: Document, url: string) { return scrapeGenericC
     return scrapeByJobLinks(doc, url, '/jobs/')
   }
 
-  function scrapePhenom(doc: Document, url: string): { jobs: ScrapedJob[], strategy: string } {
+  function scrapePhenomDOM(doc: Document, url: string): { jobs: ScrapedJob[], strategy: string } {
     const scripts = Array.from(doc.querySelectorAll('script:not([src])'))
     for (const script of scripts) {
       const text = script.textContent || ''

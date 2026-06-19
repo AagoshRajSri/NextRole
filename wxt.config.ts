@@ -116,9 +116,7 @@ export default defineConfig({
         matches: [
           'https://www.linkedin.com/company/*/jobs*',
           'https://www.linkedin.com/jobs/*',
-          // [NEXTROLE-FIX]
-          'https://www.linkedin.com/mynetwork/*',
-          'https://www.linkedin.com/feed/*',
+          // [NEXTROLE-FIX] feed removed
           'https://boards.greenhouse.io/*',
           'https://*.greenhouse.io/*',
           'https://jobs.lever.co/*',

@@ -33,7 +33,7 @@ export default defineContentScript({
     // [NEXTROLE-FIX-B2] Safe message sender that silently handles inactive service worker
     async function safeSendMessage(message: object): Promise<void> {
       try {
-        await safeSendMessage(message)
+        await browser.runtime.sendMessage(message)
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         if (
@@ -662,6 +662,13 @@ export default defineContentScript({
       }
     }
 
+    function escapeHtml(str: string | undefined): string {
+      if (!str) return '';
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
     async function renderHudContent() {
       if (!hudBody) return;
       hudBody.innerHTML = '';
@@ -698,14 +705,14 @@ export default defineContentScript({
             else if (job.matchScore >= 40) badgeColor = 'var(--amber)';
             
             html += `
-              <div class="hud-job" style="border-left: 4px solid ${badgeColor};" data-apply="${job.applyUrl}" data-id="${job.id}">
+              <div class="hud-job" style="border-left: 4px solid ${badgeColor};" data-apply="${escapeHtml(job.applyUrl)}" data-id="${escapeHtml(job.id)}">
                 <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                  <img src="${job.companyLogoUrl || 'https://www.google.com/s2/favicons?domain=linkedin.com&sz=32'}" style="width:24px;height:24px;border-radius:4px;background:#fff;" onerror="this.style.display='none'"/>
-                  <div class="hud-job-title" style="margin:0;">${job.role}</div>
+                  <img src="${escapeHtml(job.companyLogoUrl) || 'https://www.google.com/s2/favicons?domain=linkedin.com&sz=32'}" style="width:24px;height:24px;border-radius:4px;background:#fff;" onerror="this.style.display='none'"/>
+                  <div class="hud-job-title" style="margin:0;">${escapeHtml(job.role)}</div>
                 </div>
                 <div class="hud-job-meta">
-                  <span>${job.company}</span>
-                  <span>· ${job.location}</span>
+                  <span>${escapeHtml(job.company)}</span>
+                  <span>· ${escapeHtml(job.location)}</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                   <span style="font-size:10px; color:#555;">${timeText}</span>
@@ -760,11 +767,11 @@ export default defineContentScript({
         const card = document.createElement('div');
         card.className = 'hud-job';
         card.innerHTML = `
-          <div class="hud-job-title">${job.title}</div>
-          ${job.matchReason ? `<div class="hud-job-reason">Matched: ${job.matchReason.replace(':', ' · ')}</div>` : ''}
+          <div class="hud-job-title">${escapeHtml(job.title)}</div>
+          ${job.matchReason ? `<div class="hud-job-reason">Matched: ${escapeHtml(job.matchReason).replace(':', ' · ')}</div>` : ''}
           <div class="hud-job-meta">
-            ${job.companyName ? `<span>${job.companyName}</span>` : ''}
-            ${job.location ? `<span>· ${job.location}</span>` : ''}
+            ${job.companyName ? `<span>${escapeHtml(job.companyName)}</span>` : ''}
+            ${job.location ? `<span>· ${escapeHtml(job.location)}</span>` : ''}
             ${!job.seenAt ? '<span class="badge-new">NEW</span>' : ''}
           </div>
         `;

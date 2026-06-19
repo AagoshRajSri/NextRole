@@ -487,18 +487,18 @@ async function loadFeed() {
   const markAllBtn = $('mark-all-btn');
 
   // Load preferences for FIX-4A and nr_job_store for LinkedIn jobs
-  const storageData = await browser.storage.local.get(['nr_profile', 'monitorConfig', 'nr_job_store']);
+  const storageData = await browser.storage.local.get(['nr_profile', 'monitorConfig', 'nr_job_store']) as any;
   const prof = storageData.nr_profile ?? {};
   const mc = storageData.monitorConfig ?? {};
   const prefRoles = ((prof.targetRoles as string[]) ?? (prof.preferredRoles as string[]) ?? (mc.roles as string[]) ?? []).filter(Boolean);
-  const prefLocs = ((prof.locations as string[]) ?? (prof.preferredLocations as string[]) ?? (mc.location ? [mc.location as string] : []) ?? []).filter(Boolean);
+  const prefLocs = ((prof.locations as string[]) ?? (prof.preferredLocations as string[]) ?? (mc.location ? [mc.location as string] : [])).filter(Boolean);
   const followedComps = storageData.nr_job_store?.followedCompanies ?? [];
   const linkedInJobs = storageData.nr_job_store?.jobs ?? [];
 
   // Merge unseenJobs (ATS) with linkedInJobs (LinkedIn pipeline A)
   let allJobs = [
     ...unseenJobs.filter(j => !j.dismissed && (!j.snoozedUntil || j.snoozedUntil < Date.now())).map(j => ({ ...j, isATS: true })),
-    ...linkedInJobs.filter(j => j.status !== 'applied').map(j => ({
+    ...linkedInJobs.filter((j: any) => j.status !== 'applied').map((j: any) => ({
       id: j.id,
       title: j.role,
       companyName: j.company,

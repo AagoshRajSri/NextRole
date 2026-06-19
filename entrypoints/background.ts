@@ -367,11 +367,22 @@ export default defineBackground(() => {
       }
     }
 
-    // Require a LinkedIn tab to be open
-    const linkedInTabs = await browser.tabs.query({ url: '*://*.linkedin.com/*' })
+    // Get existing LinkedIn tab or spawn a temporary hidden one
+    let linkedInTabs = await browser.tabs.query({ url: '*://*.linkedin.com/*' })
+    let temporaryTabId: number | undefined;
+
     if (linkedInTabs.length === 0) {
-      console.log('[NextRole:Scan] No LinkedIn tab open, skipping')
-      return
+      console.log('[NextRole:Scan] No LinkedIn tab open. Spawning a temporary background tab for the scan.')
+      try {
+        const newTab = await browser.tabs.create({ url: 'https://www.linkedin.com/jobs', active: false })
+        temporaryTabId = newTab.id
+        linkedInTabs = [newTab]
+        // Wait 8 seconds for the page and content script to fully load
+        await new Promise(resolve => setTimeout(resolve, 8000))
+      } catch (err) {
+        console.error('[NextRole:Scan] Failed to spawn temporary LinkedIn tab', err)
+        return
+      }
     }
 
     if (store.followedCompanies.length === 0) {
@@ -387,7 +398,7 @@ export default defineBackground(() => {
     }
 
     // [FIX-3] Read preferences from both storage keys, merge
-    const storage = await browser.storage.local.get(['monitorConfig', 'nr_profile'])
+    const storage = await browser.storage.local.get(['monitorConfig', 'nr_profile']) as any
     const profile = storage.nr_profile ?? {}
     const monitorConfig = storage.monitorConfig ?? {}
 
@@ -401,8 +412,7 @@ export default defineBackground(() => {
     const preferredLocations: string[] = (
       (profile.locations as string[]) ??
       (profile.preferredLocations as string[]) ??
-      (monitorConfig.location ? [monitorConfig.location as string] : []) ??
-      []
+      (monitorConfig.location ? [monitorConfig.location as string] : [])
     ).filter(Boolean)
 
     
@@ -461,6 +471,10 @@ scanInProgress = true
       scanInProgress = false
       await browser.storage.local.set({ nr_scanning: false })
 
+      if (temporaryTabId) {
+        await browser.tabs.remove(temporaryTabId).catch(() => {})
+      }
+
       // Notify popup to refresh
       browser.runtime.sendMessage({ type: 'SCAN_COMPLETE' }).catch(() => {})
 
@@ -496,7 +510,7 @@ scanInProgress = true
       (async () => {
         const { rawJson, companySlug, companyName, companyLogoUrl } = message.payload
         // [FIX-3] Read preferences from both storage keys, merge
-        const storage = await browser.storage.local.get(['monitorConfig', 'nr_profile'])
+        const storage = await browser.storage.local.get(['monitorConfig', 'nr_profile']) as any
         const profile = storage.nr_profile ?? {}
         const monitorConfig = storage.monitorConfig ?? {}
 
@@ -510,8 +524,7 @@ scanInProgress = true
         const preferredLocations: string[] = (
           (profile.locations as string[]) ??
           (profile.preferredLocations as string[]) ??
-          (monitorConfig.location ? [monitorConfig.location as string] : []) ??
-          []
+          (monitorConfig.location ? [monitorConfig.location as string] : [])
         ).filter(Boolean)
 
         // [FIX-5] Enrich company info
@@ -780,6 +793,13 @@ scanInProgress = true
 
   const syncSessionCookies = async () => {
     try {
+      const storage = await browser.storage.local.get('lastCookieSync') as any;
+      const now = Date.now();
+      if (storage.lastCookieSync && now - storage.lastCookieSync < 12 * 60 * 60 * 1000) {
+        logger.info('cookies', 'Cookie sync skipped (deduplicated)');
+        return;
+      }
+
       const domains = ['.linkedin.com', 'linkedin.com', '.myworkdayjobs.com', '.greenhouse.io', '.lever.co'];
       const cookies = [];
       
@@ -789,12 +809,10 @@ scanInProgress = true
       }
       
       if (cookies.length > 0) {
-        // SECURITY TODO: Cookies are currently encrypted at rest in the backend (AES-256-GCM),
-        // but passing session cookies over the wire requires strict HTTPS and high trust.
-        // For enhanced security, implement E2E encryption (e.g. encrypt with user's public key here).
         const userId = await getUserId();
         const apiClient = new ApiClient(userId);
         await apiClient.post('/api/cookies', { cookies });
+        await browser.storage.local.set({ lastCookieSync: now });
         logger.info('cookies', `Synced ${cookies.length} session cookies`);
       }
     } catch (err) {
@@ -825,27 +843,7 @@ scanInProgress = true
 
   browser.runtime.onInstalled.addListener(async () => {
     await setupAlarms();
-    // [NEXTROLE-FIX] Inject content script into any already-open LinkedIn tabs
-    // on extension install/update — handles tabs open before extension loaded
-    try {
-      const linkedInTabs = await browser.tabs.query({
-        url: 'https://www.linkedin.com/*'
-      })
-      for (const tab of linkedInTabs) {
-        if (!tab.id) continue
-        try {
-          await browser.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['content-scripts/content.js']
-          })
-          console.log('[NextRole:BG] Injected content script into existing tab:', tab.url)
-        } catch {
-          // Tab may not allow injection (chrome:// pages etc) — skip silently
-        }
-      }
-    } catch (err) {
-      console.warn('[NextRole:BG] Could not inject into existing tabs:', err)
-    }
+    // Manual WXT content script injection removed to prevent postinstall race condition.
   });
 
 // [NEXTROLE-FIX-B3] Keep service worker alive while LinkedIn tabs are open
@@ -870,7 +868,7 @@ browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     try {
       await browser.scripting.executeScript({
         target: { tabId },
-        files: ['content-scripts/content.js']
+        files: ['/content-scripts/content.js']
       })
     } catch {
       // Already injected or not allowed — ignore

@@ -409,11 +409,13 @@ function initWizard() {
     document.getElementById('toggle-email')?.classList.toggle('on', !!profileData.emailAlerts);
   });
 
+  document.getElementById('ob-name')?.addEventListener('input', validateCurrentStep);
   document.getElementById('ob-email')?.addEventListener('input', (e) => {
     const val = (e.target as HTMLInputElement).value;
     profileData.email = val;
     const row = document.getElementById('email-toggle-row');
     if (row) row.style.display = val.includes('@') ? 'flex' : 'none';
+    validateCurrentStep();
   });
 }
 
@@ -500,7 +502,17 @@ async function handleBack() {
 
 function validateCurrentStep() {
   const btnNext = document.getElementById('btn-next') as HTMLButtonElement;
-  if (btnNext) btnNext.disabled = currentStep === 2 && profileData.targetRoles.length === 0;
+  if (!btnNext) return;
+  
+  if (currentStep === 1) {
+    const name = (document.getElementById('ob-name') as HTMLInputElement)?.value.trim() || '';
+    const email = (document.getElementById('ob-email') as HTMLInputElement)?.value.trim() || '';
+    btnNext.disabled = !name || !email.includes('@');
+  } else if (currentStep === 2) {
+    btnNext.disabled = profileData.targetRoles.length === 0;
+  } else {
+    btnNext.disabled = false;
+  }
 }
 
 function saveCurrentStepData() {

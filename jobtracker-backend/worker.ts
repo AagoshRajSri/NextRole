@@ -1,16 +1,13 @@
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { Worker, Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { PrismaClient } from '@prisma/client';
 import { scrapeJobsWithResult, ScraperResult } from './scraper.js';
-import { Resend } from 'resend';
 import { chromium } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { marked } from 'marked';
 import {
   extractCompanyFromUrl,
   jobMatchesPrefs,
@@ -23,12 +20,6 @@ dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const prisma = new PrismaClient();
-const bedrock = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
-
-// Resend email client
-const resendKey = process.env.RESEND_API_KEY || '';
-const resend = resendKey.startsWith('re_') ? new Resend(resendKey) : null;
-const SENDER_EMAIL = process.env.SENDER_EMAIL || 'NextRole Alerts <alerts@nextrole.com>';
 
 // Public resume directory
 const publicResumeDir = path.join(__dirname, 'public', 'resumes');
@@ -41,8 +32,17 @@ if (!fs.existsSync(publicResumeDir)) {
 // ────────────────────────────────────────────────────────
 const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+connection.on('error', (err) => {
+  // Suppress unhandled error events
+});
 const redisPublisher = new Redis(redisUrl, { maxRetriesPerRequest: null });
+redisPublisher.on('error', (err) => {
+  // Suppress unhandled error events
+});
 const monitorQueue = new Queue('monitorQueue', { connection });
+monitorQueue.on('error', (err) => {
+  // Suppress Queue connection errors
+});
 
 console.log('[Worker] Connected to Redis. Initializing worker...');
 
@@ -82,13 +82,7 @@ async function scrapeWithRetry(url: string, cookies: Array<Record<string, any>> 
   return lastResult!;
 }
 
-const worker = new Worker('monitorQueue', async (job) => {
-  // Route to the right handler
-  if (job.name === 'resume-tailoring') {
-    return handleResumeTailoring(job.data);
-  }
-
-  // Default: scrape job
+const worker = new Worker('monitorQueue', async (job) => {  // Default: scrape job
   const { searchId, url } = job.data;
   console.log(`\n[Worker] Processing scrape: ${searchId} → ${url}`);
 
@@ -263,67 +257,8 @@ async function sendJobEmailAlert(
   matchReason: string,
   userEmail?: string | null,
 ) {
-  const emailHtml = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; padding: 24px; color: #1e293b; margin: 0; }
-          .container { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-          .header { background: linear-gradient(135deg, #050D17, #0A1525); padding: 32px 24px; text-align: center; color: #fff; }
-          .header h1 { font-size: 24px; font-weight: 700; margin: 0; color: #00E5FF; }
-          .body { padding: 32px 24px; }
-          .badge { display: inline-block; background: #ecfdf5; color: #059669; font-weight: 600; font-size: 12px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 16px; }
-          .match-badge { display: inline-block; background: #f0f9ff; color: #0284c7; font-weight: 600; font-size: 12px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 16px; margin-left: 8px; }
-          .job-title { font-size: 22px; font-weight: 700; color: #0f172a; margin: 0 0 8px; }
-          .meta { font-size: 14px; color: #64748b; margin-bottom: 24px; }
-          .btn { display: inline-block; background: #050D17; color: #00E5FF; font-weight: 600; font-size: 14px; text-decoration: none; padding: 12px 24px; border-radius: 8px; border: 1px solid #00E5FF; }
-          .footer { text-align: center; font-size: 12px; color: #94a3b8; padding: 24px; border-top: 1px solid #f1f5f9; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header"><h1>NextRole</h1></div>
-          <div class="body">
-            <span class="badge">New Job Alert</span>
-            <span class="match-badge">Matched: ${matchReason}</span>
-            <h2 class="job-title">${job.title}</h2>
-            <div class="meta">
-              <span>🏢 <strong>${company}</strong></span> · <span>📍 ${job.location}</span>
-            </div>
-            <p style="font-size: 15px; line-height: 1.6; color: #475569; margin-bottom: 32px;">
-              This role matched your keyword: <strong>${matchReason}</strong>
-            </p>
-            <a href="${job.url}" class="btn" target="_blank">Apply Now →</a>
-          </div>
-          <div class="footer">
-            <p>You received this because you're tracking ${company} on NextRole.</p>
-            <p>© 2026 NextRole. All rights reserved.</p>
-          </div>
-        </div>
-      </body>
-    </html>
-  `;
-
   const to = userEmail || `user-${userId}@gmail.com`;
-
-  if (!resend) {
-    console.log(`[Email Mock] To: ${to} | Subject: ${job.title} at ${company} | Match: ${matchReason}`);
-    return;
-  }
-
-  try {
-    await resend.emails.send({
-      from: SENDER_EMAIL,
-      to,
-      subject: `🚨 New Match: ${job.title} at ${company}`,
-      html: emailHtml,
-    });
-    console.log('[Email] Alert sent via Resend.');
-  } catch (err) {
-    console.error('[Email] Send failed:', err);
-  }
+  console.log(`[Email Mock] To: ${to} | Subject: ${job.title} at ${company} | Match: ${matchReason}`);
 }
 
 // ────────────────────────────────────────────────────────
@@ -358,167 +293,121 @@ async function scrapeFullJobDescription(url: string): Promise<string> {
 }
 
 // ────────────────────────────────────────────────────────
-// BEDROCK EMBEDDINGS (kept — premium only)
+// PREMIUM AI RESUME TAILORING PIPELINE
 // ────────────────────────────────────────────────────────
-async function generateBedrockEmbedding(text: string): Promise<number[]> {
-  try {
-    const cmd = new InvokeModelCommand({
-      modelId: 'amazon.titan-embed-text-v2:0',
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify({ inputText: text.substring(0, 8000) }),
-    });
-    const res = await bedrock.send(cmd);
-    const parsed = JSON.parse(new TextDecoder().decode(res.body));
-    return parsed.embedding || [];
-  } catch (err) {
-    console.error('[Bedrock] Embedding failed:', err);
-    return [];
-  }
-}
-
-// ────────────────────────────────────────────────────────
-// AI RESUME TAILORING (premium only)
-// ────────────────────────────────────────────────────────
-async function handleResumeTailoring(data: any) {
-  const { userId, company, jobSnapshot } = data;
-  console.log(`[AI Engine] Resume tailoring for "${jobSnapshot.title}" at "${company}"`);
-
-  const sub = await prisma.userSubscription.findUnique({ where: { userId } });
-  if (!sub || !sub.isActive) {
-    console.log(`[AI Engine] User "${userId}" not premium. Skipping.`);
-    return;
-  }
-
-  const profile = await prisma.userProfile.findUnique({ where: { userId } });
-  if (!profile) {
-    console.log(`[AI Engine] No profile for user "${userId}". Skipping.`);
-    return;
-  }
-
-  try {
-    const fullDesc = await scrapeFullJobDescription(jobSnapshot.url);
-    const tailoredText = await callBedrockToTailorResume(profile, jobSnapshot, fullDesc);
-
-    const filename = `tailored-${jobSnapshot.id}.pdf`;
-    const localPath = path.join(publicResumeDir, filename);
-    const htmlContent = await marked.parse(tailoredText);
-    await generatePdfFile(htmlContent, localPath);
-    const pdfUrl = `/resumes/${filename}`;
-
-    await prisma.tailoredResume.create({
-      data: {
-        jobSnapshotId: jobSnapshot.id,
-        resumeText: tailoredText,
-        pdfUrl,
-      },
-    });
-
-    console.log(`[AI Engine] Resume saved: ${pdfUrl}`);
-  } catch (err) {
-    console.error('[AI Engine] Tailoring error:', err);
-  }
-}
-
 async function handlePremiumAiTailoring(
-  userId: string, company: string,
-  jobSnapshot: { id: string; title: string; location: string; url: string },
-  fullDesc: string,
-) {
-  const sub = await prisma.userSubscription.findUnique({ where: { userId } });
-  if (!sub || !sub.isActive) return;
-
-  const profile = await prisma.userProfile.findUnique({ where: { userId } });
-  if (!profile) return;
-
+  userId: string,
+  companyName: string,
+  jobSnapshot: any,
+  jobDescription: string,
+): Promise<void> {
+  console.log(`[AI Tailoring] Starting resume tailoring for user: ${userId}, Job: ${jobSnapshot.title} at ${companyName}`);
+  
   try {
-    const tailoredText = await callBedrockToTailorResume(profile, jobSnapshot, fullDesc);
-    const filename = `tailored-${jobSnapshot.id}.pdf`;
-    const localPath = path.join(publicResumeDir, filename);
-    const htmlContent = await marked.parse(tailoredText);
-    await generatePdfFile(htmlContent, localPath);
+    const userProfile = await prisma.userProfile.findUnique({ where: { userId } });
+    if (!userProfile) {
+      console.warn(`[AI Tailoring] User profile not found for user: ${userId}`);
+      return;
+    }
 
-    await prisma.tailoredResume.create({
-      data: {
-        jobSnapshotId: jobSnapshot.id,
-        resumeText: tailoredText,
-        pdfUrl: `/resumes/${filename}`,
-      },
-    });
-  } catch (err) {
-    console.error('[AI Engine] Auto-tailoring error:', err);
+    const hasResumeData = userProfile.experience || userProfile.skills || userProfile.education || userProfile.projects;
+    if (!hasResumeData) {
+      console.log(`[AI Tailoring] User has no resume details in profile. Skipping tailoring.`);
+      return;
+    }
+
+    const promptText = `
+You are an expert resume writer and career coach.
+Your task is to tailor the user's resume sections (Experience, Skills, Education, Projects) to align with the following job description.
+
+Job Title: ${jobSnapshot.title}
+Company: ${companyName}
+Location: ${jobSnapshot.location || 'Not Specified'}
+Job Description:
+${jobDescription}
+
+User's Current Resume Details:
+Experience:
+${userProfile.experience || 'None'}
+
+Skills:
+${userProfile.skills || 'None'}
+
+Education:
+${userProfile.education || 'None'}
+
+Projects:
+${userProfile.projects || 'None'}
+
+Please tailor these sections to highlight relevant skills and achievements that match the requirements of the job.
+Keep the output professional, formatted in clean markdown, containing sections for Tailored Experience, Tailored Skills, Tailored Projects, and Education.
+Do not invent facts, only rephrase and emphasize existing experiences.
+`;
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    let resumeText = '';
+
+    if (!apiKey || apiKey === 'sk-ant-123456') {
+      console.log('[AI Tailoring] Dev/Mock mode enabled. Generating mock tailored resume.');
+      resumeText = `
+# Tailored Resume for ${userProfile.name || 'User'}
+Target: ${jobSnapshot.title} at ${companyName}
+
+## Professional Summary
+Accomplished professional tailored for the ${jobSnapshot.title} position at ${companyName}.
+
+## Tailored Experience
+${userProfile.experience || 'No experience details specified.'}
+
+## Tailored Skills
+${userProfile.skills || 'No skills details specified.'}
+
+## Tailored Projects
+${userProfile.projects || 'No project details specified.'}
+
+## Education
+${userProfile.education || 'No education details specified.'}
+      `.trim();
+    } else {
+      console.log('[AI Tailoring] Sending request to Anthropic Claude...');
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-sonnet-20240620',
+          max_tokens: 3000,
+          messages: [{ role: 'user', content: promptText }],
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Anthropic API returned status ${response.status}: ${await response.text()}`);
+      }
+
+      const data = await response.json() as any;
+      resumeText = data.content?.[0]?.text || '';
+    }
+
+    if (resumeText) {
+      await prisma.tailoredResume.create({
+        data: {
+          jobSnapshotId: jobSnapshot.id,
+          resumeText,
+          pdfUrl: null,
+        },
+      });
+      console.log(`[AI Tailoring] ✅ Successfully saved tailored resume for job snapshot: ${jobSnapshot.id}`);
+    } else {
+      console.warn('[AI Tailoring] Tailored resume generation resulted in empty text.');
+    }
+  } catch (err: any) {
+    console.error(`[AI Tailoring] Error in resume tailoring pipeline:`, err);
   }
 }
 
-async function callBedrockToTailorResume(
-  profile: { experience: string; skills: string; education: string; projects: string },
-  job: { title: string },
-  jobDesc: string,
-): Promise<string> {
-  const prompt = `You are an elite AI resume engineer. Analyse the candidate profile and job description, then generate a hyper-tailored ATS-optimized resume in Markdown.
+// ────────────────────────────────────────────────────────
 
-<MASTER_PROFILE>
-Experience: ${profile.experience}
-Skills: ${profile.skills}
-Education: ${profile.education}
-Projects: ${profile.projects}
-</MASTER_PROFILE>
-
-<TARGET_JOB>
-Role: ${job.title}
-${jobDesc}
-</TARGET_JOB>
-
-Rules:
-- Output ONLY valid Markdown. No commentary.
-- Never invent certifications, employers, or metrics.
-- Use X-Y-Z bullet format: "Accomplished X, measured by Y, by doing Z."
-- Include sections: Name/Contact, Summary, Skills, Experience, Education, Projects.`;
-
-  try {
-    const cmd = new InvokeModelCommand({
-      modelId: 'anthropic.claude-3-5-sonnet-20241022-v2:0',
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: 4000,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-    const res = await bedrock.send(cmd);
-    const parsed = JSON.parse(new TextDecoder().decode(res.body));
-    return parsed.content[0].text;
-  } catch (err) {
-    console.error('[AI Engine] Bedrock call failed:', err);
-    return `# ${job.title}\n\n*Resume tailoring temporarily unavailable.*`;
-  }
-}
-
-async function generatePdfFile(htmlContent: string, outputPath: string) {
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.setContent(`
-      <!DOCTYPE html>
-      <html><head><style>
-        @page { size: A4; margin: 0.65in; }
-        body { font-family: Arial, Helvetica, sans-serif; color: #111; line-height: 1.4; font-size: 10.5pt; margin: 0; padding: 0; }
-        h1 { font-size: 22pt; text-transform: uppercase; text-align: center; margin: 0 0 4px; }
-        h2 { font-size: 13pt; color: #0f172a; border-bottom: 1px solid #94a3b8; text-transform: uppercase; margin: 16px 0 8px; padding-bottom: 2px; }
-        h3 { font-size: 11pt; margin: 8px 0 2px; }
-        p { margin: 0 0 8px; text-align: justify; }
-        ul { margin: 0 0 8px; padding-left: 20px; }
-        li { margin-bottom: 3px; text-align: justify; }
-        h2, h3 { page-break-after: avoid; break-after: avoid; }
-      </style></head><body>${htmlContent}</body></html>
-    `);
-    await page.pdf({
-      path: outputPath,
-      format: 'A4',
-      margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' },
-    });
-  } finally {
-    await browser.close();
-  }
-}

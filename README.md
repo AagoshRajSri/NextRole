@@ -1,21 +1,21 @@
 # ⚡ NextRole — Real-Time Career Intelligence & ATS Co-pilot ⚡
 
 <div align="center">
-  <p><strong>A high-fidelity, autonomous ATS scraping co-pilot and real-time career monitoring terminal.</strong></p>
+  <p><strong>An autonomous, high-fidelity browser extension co-pilot & real-time career monitoring pipeline.</strong></p>
 
   [![WXT](https://img.shields.io/badge/Extension-WXT_v0.20_(_MV3_)-00f0ff?style=for-the-badge&logo=googlechrome&logoColor=white)](https://wxt.dev/)
   [![React](https://img.shields.io/badge/Frontend-React_19-61dafb?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
   [![Backend](https://img.shields.io/badge/Backend-Express.js_v4-f0ff00?style=for-the-badge&logo=express&logoColor=black)](https://expressjs.com/)
   [![Queue](https://img.shields.io/badge/Queue-BullMQ_v5_%26_Redis-e22020?style=for-the-badge&logo=redis&logoColor=white)](https://bullmq.io/)
-  [![Database](https://img.shields.io/badge/Database-PostgreSQL_%26_Prisma_v5-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://prisma.io)
-  [![AI](https://img.shields.io/badge/Core_AI-Claude_3.5_Sonnet-8a3ffc?style=for-the-badge&logo=anthropic&logoColor=white)](https://aws.amazon.com/bedrock/)
+  [![Database](https://img.shields.io/badge/Database-PostgreSQL_%26_Prisma_v6-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://prisma.io)
+  [![Vitest](https://img.shields.io/badge/Testing-Vitest_v4_(_128_Tests_)-41b883?style=for-the-badge&logo=vitest&logoColor=white)](https://vitest.dev/)
 </div>
 
 ---
 
 ## 🛰️ System Architecture
 
-NextRole links a chrome-injected content script (side panel with glassmorphism UI) with a high-throughput Express.js backend, a BullMQ queue processor running Playwright scrapers, and AWS Bedrock (Claude 3.5 Sonnet + Titan Embeddings) for resume tailoring and semantic scoring:
+NextRole integrates an in-page Chrome content script (glassmorphic React HUD panel) with a high-throughput Express.js backend, a BullMQ queue processor running headless Playwright crawlers, and AWS Bedrock (Claude 3.5 Sonnet + Titan Embeddings) for semantic matching and resume tailoring.
 
 ```mermaid
 graph TD
@@ -76,7 +76,7 @@ graph TD
 * **Action Badge Overlays:** Standard badge alerts (`#00E5FF`) on the extension icon indicating new, unseen matching jobs.
 * **Desktop Notifications:** Native browser notifications with "View Job" and "Snooze" buttons.
 * **Websocket Sync:** Real-time push updates via Socket.io directly from the server.
-* **Email Notifications:** Rich HTML alerts sent via the Resend API when immediate matches are found.
+* **Console Mock Alerts:** Stubbed notification logs output to stdout in the worker process (replacing the external Resend API dependency for isolated security).
 
 ---
 
@@ -99,14 +99,15 @@ graph TD
 │   ├── storage.ts         # Local/sync extension storage wrappers
 │   └── voyagerParser.ts   # Parsing logic for intercepted LinkedIn Voyager API payloads
 ├── jobtracker-backend/
-│   ├── server.ts          # Express.js API Server (Prisma routing, cookie synchronization, checkout gates)
+│   ├── sharedUtils.ts     # Centralized source of truth for URL parsing & platform detection (pure ESM)
+│   ├── server.ts          # Express.js API Server (Prisma routing, cookie synchronization)
 │   ├── worker.ts          # BullMQ queue runner (Playwright scrapers & AWS Bedrock tailoring)
 │   ├── scraper.ts         # Headless ATS scraper (Playwright-extra + Stealth plugin)
-│   ├── utils.ts           # Encryption/decryption helpers (AES-256-GCM)
+│   ├── utils.ts           # Encryption/decryption helpers (AES-256-GCM) & match score wrappers
 │   └── prisma/
 │       └── schema.prisma  # PostgreSQL models (TrackedSearch, JobSnapshot, UserProfile, TailoredResume)
 ├── wxt.config.ts          # WXT Manifest & Extension compiler (MV3 permissions & wildcards)
-└── package.json           # Extension dependencies
+├── package.json           # Extension dependencies
 ```
 
 ---
@@ -135,11 +136,6 @@ Tested across standard enterprise ATS platforms and job boards:
 * **Location Filtering:** Accuracy of location matching is **99.2%**, correctly separating remote listings from local physical listings.
 * **Seniority Heuristic:** Reduced spam by **87%** for junior developers by applying a `-10` score penalty on senior/staff roles, automatically keeping them below the alert threshold.
 
-### 3. AI Resume Generation Metrics
-* **Titan Embedding v2:** Computes **1024-dimensional** text embeddings for profile and job matching.
-* **Claude 3.5 Sonnet Response Time:** Averages **5.2s** to tailor a master resume of ~1,500 words to match a target job description.
-* **PDF Compilation Speed:** Playwright compiles the output Markdown to an A4 PDF in **0.9s** with clean page margins and layout formatting.
-
 ---
 
 ## 🛠️ Technology Stack
@@ -150,15 +146,38 @@ Tested across standard enterprise ATS platforms and job boards:
 * **TailwindCSS (v3.4.19):** Styling engine.
 * **Socket.io Client (v4.8.3):** Real-time alert notifications.
 * **TypeScript (v5.9.3):** Full-stack type safety.
+* **Vitest (v4.1.8):** Comprehensive unit/integration testing.
 
 ### Backend Services
 * **Express.js (v4.19.2):** API server.
-* **Prisma (v5.14.0):** PostgreSQL Database Client.
+* **Prisma (v6.19.3):** PostgreSQL Database Client.
 * **BullMQ (v5.8.3):** Redis-based job queues.
 * **Playwright-extra (v4.3.6) + Stealth (v2.11.2):** Undetectable browser crawlers.
 * **AWS Bedrock SDK (v3.1049.0):** Anthropic Claude 3.5 Sonnet & Titan Embeddings.
-* **Resend (v3.2.0):** High-deliverability transactional emails.
 * **Stripe (v15.8.0):** Premium subscription gating.
+
+---
+
+## 🧪 Hardened Test Suite
+
+The project implements a fast, comprehensive Vitest execution environment. Run tests via:
+
+```bash
+# Run the entire test suite (128 passing tests)
+npm test
+
+# Run tests in interactive watch mode
+npm run test:watch
+
+# Generate code coverage reports
+npm run test:coverage
+```
+
+### Coverage Scope:
+* **`tests/utils.test.ts` & `tests/backendUtils.test.ts`:** URL parsing, normalization logic, and ATS platform detection checks.
+* **`tests/clientScraper.test.ts`:** In-page scrapers (Greenhouse, Lever, and Fallback DOM extractions) mocked using lightweight mock-DOM nodes.
+* **`tests/server.test.ts`:** Express.js API integration tests utilizing `supertest`, mocking Database client, Redis, and BullMQ channels for zero-network execution.
+* **`tests/voyagerParser.test.ts` & `tests/matchScoring.test.ts`:** LinkedIn intercepted responses and heuristic matching scoring.
 
 ---
 
@@ -168,7 +187,7 @@ Tested across standard enterprise ATS platforms and job boards:
 Ensure PostgreSQL is running and has the `pgvector` extension enabled.
 
 ### 2. Backend Configuration
-Navigate into the backend directory:
+Navigate into the backend directory and install dependencies:
 ```bash
 cd jobtracker-backend
 npm install
@@ -183,11 +202,9 @@ REDIS_URL="redis://127.0.0.1:6379"
 AWS_ACCESS_KEY_ID="your-key"
 AWS_SECRET_ACCESS_KEY="your-secret"
 AWS_REGION="us-east-1"
-RESEND_API_KEY="re_yourkey"
-SENDER_EMAIL="NextRole Alerts <alerts@nextrole.com>"
 STRIPE_SECRET_KEY="sk_test_yourkey"
 JWT_SECRET="secure_jwt_secret_for_sessions"
-ENCRYPTION_KEY="32-byte-hex-key-for-cookies"
+COOKIE_ENCRYPTION_KEY="32-byte-hex-key-for-cookies"
 ```
 
 Apply schemas and generate the Prisma Client:
