@@ -1,0 +1,125 @@
+[1mdiff --git a/README.md b/README.md[m
+[1mindex e948720..936e316 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -1,21 +1,21 @@[m
+ # ⚡ NextRole — Real-Time Career Intelligence & ATS Co-pilot ⚡[m
+ [m
+ <div align="center">[m
+[31m-  <p><strong>A high-fidelity, autonomous ATS scraping co-pilot and real-time career monitoring terminal.</strong></p>[m
+[32m+[m[32m  <p><strong>An autonomous, high-fidelity browser extension co-pilot & real-time career monitoring pipeline.</strong></p>[m
+ [m
+   [![WXT](https://img.shields.io/badge/Extension-WXT_v0.20_(_MV3_)-00f0ff?style=for-the-badge&logo=googlechrome&logoColor=white)](https://wxt.dev/)[m
+   [![React](https://img.shields.io/badge/Frontend-React_19-61dafb?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)[m
+   [![Backend](https://img.shields.io/badge/Backend-Express.js_v4-f0ff00?style=for-the-badge&logo=express&logoColor=black)](https://expressjs.com/)[m
+   [![Queue](https://img.shields.io/badge/Queue-BullMQ_v5_%26_Redis-e22020?style=for-the-badge&logo=redis&logoColor=white)](https://bullmq.io/)[m
+[31m-  [![Database](https://img.shields.io/badge/Database-PostgreSQL_%26_Prisma_v5-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://prisma.io)[m
+[31m-  [![AI](https://img.shields.io/badge/Core_AI-Claude_3.5_Sonnet-8a3ffc?style=for-the-badge&logo=anthropic&logoColor=white)](https://aws.amazon.com/bedrock/)[m
+[32m+[m[32m  [![Database](https://img.shields.io/badge/Database-PostgreSQL_%26_Prisma_v6-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://prisma.io)[m
+[32m+[m[32m  [![Vitest](https://img.shields.io/badge/Testing-Vitest_v4_(_128_Tests_)-41b883?style=for-the-badge&logo=vitest&logoColor=white)](https://vitest.dev/)[m
+ </div>[m
+ [m
+ ---[m
+ [m
+ ## 🛰️ System Architecture[m
+ [m
+[31m-NextRole links a chrome-injected content script (side panel with glassmorphism UI) with a high-throughput Express.js backend, a BullMQ queue processor running Playwright scrapers, and AWS Bedrock (Claude 3.5 Sonnet + Titan Embeddings) for resume tailoring and semantic scoring:[m
+[32m+[m[32mNextRole integrates an in-page Chrome content script (glassmorphic React HUD panel) with a high-throughput Express.js backend, a BullMQ queue processor running headless Playwright crawlers, and AWS Bedrock (Claude 3.5 Sonnet + Titan Embeddings) for semantic matching and resume tailoring.[m
+ [m
+ ```mermaid[m
+ graph TD[m
+[36m@@ -76,7 +76,7 @@[m [mgraph TD[m
+ * **Action Badge Overlays:** Standard badge alerts (`#00E5FF`) on the extension icon indicating new, unseen matching jobs.[m
+ * **Desktop Notifications:** Native browser notifications with "View Job" and "Snooze" buttons.[m
+ * **Websocket Sync:** Real-time push updates via Socket.io directly from the server.[m
+[31m-* **Email Notifications:** Rich HTML alerts sent via the Resend API when immediate matches are found.[m
+[32m+[m[32m* **Console Mock Alerts:** Stubbed notification logs output to stdout in the worker process (replacing the external Resend API dependency for isolated security).[m
+ [m
+ ---[m
+ [m
+[36m@@ -99,14 +99,15 @@[m [mgraph TD[m
+ │   ├── storage.ts         # Local/sync extension storage wrappers[m
+ │   └── voyagerParser.ts   # Parsing logic for intercepted LinkedIn Voyager API payloads[m
+ ├── jobtracker-backend/[m
+[31m-│   ├── server.ts          # Express.js API Server (Prisma routing, cookie synchronization, checkout gates)[m
+[32m+[m[32m│   ├── sharedUtils.ts     # Centralized source of truth for URL parsing & platform detection (pure ESM)[m
+[32m+[m[32m│   ├── server.ts          # Express.js API Server (Prisma routing, cookie synchronization)[m
+ │   ├── worker.ts          # BullMQ queue runner (Playwright scrapers & AWS Bedrock tailoring)[m
+ │   ├── scraper.ts         # Headless ATS scraper (Playwright-extra + Stealth plugin)[m
+[31m-│   ├── utils.ts           # Encryption/decryption helpers (AES-256-GCM)[m
+[32m+[m[32m│   ├── utils.ts           # Encryption/decryption helpers (AES-256-GCM) & match score wrappers[m
+ │   └── prisma/[m
+ │       └── schema.prisma  # PostgreSQL models (TrackedSearch, JobSnapshot, UserProfile, TailoredResume)[m
+ ├── wxt.config.ts          # WXT Manifest & Extension compiler (MV3 permissions & wildcards)[m
+[31m-└── package.json           # Extension dependencies[m
+[32m+[m[32m├── package.json           # Extension dependencies[m
+ ```[m
+ [m
+ ---[m
+[36m@@ -135,11 +136,6 @@[m [mTested across standard enterprise ATS platforms and job boards:[m
+ * **Location Filtering:** Accuracy of location matching is **99.2%**, correctly separating remote listings from local physical listings.[m
+ * **Seniority Heuristic:** Reduced spam by **87%** for junior developers by applying a `-10` score penalty on senior/staff roles, automatically keeping them below the alert threshold.[m
+ [m
+[31m-### 3. AI Resume Generation Metrics[m
+[31m-* **Titan Embedding v2:** Computes **1024-dimensional** text embeddings for profile and job matching.[m
+[31m-* **Claude 3.5 Sonnet Response Time:** Averages **5.2s** to tailor a master resume of ~1,500 words to match a target job description.[m
+[31m-* **PDF Compilation Speed:** Playwright compiles the output Markdown to an A4 PDF in **0.9s** with clean page margins and layout formatting.[m
+[31m-[m
+ ---[m
+ [m
+ ## 🛠️ Technology Stack[m
+[36m@@ -150,25 +146,48 @@[m [mTested across standard enterprise ATS platforms and job boards:[m
+ * **TailwindCSS (v3.4.19):** Styling engine.[m
+ * **Socket.io Client (v4.8.3):** Real-time alert notifications.[m
+ * **TypeScript (v5.9.3):** Full-stack type safety.[m
+[32m+[m[32m* **Vitest (v4.1.8):** Comprehensive unit/integration testing.[m
+ [m
+ ### Backend Services[m
+ * **Express.js (v4.19.2):** API server.[m
+[31m-* **Prisma (v5.14.0):** PostgreSQL Database Client.[m
+[32m+[m[32m* **Prisma (v6.19.3):** PostgreSQL Database Client.[m
+ * **BullMQ (v5.8.3):** Redis-based job queues.[m
+ * **Playwright-extra (v4.3.6) + Stealth (v2.11.2):** Undetectable browser crawlers.[m
+ * **AWS Bedrock SDK (v3.1049.0):** Anthropic Claude 3.5 Sonnet & Titan Embeddings.[m
+[31m-* **Resend (v3.2.0):** High-deliverability transactional emails.[m
+ * **Stripe (v15.8.0):** Premium subscription gating.[m
+ [m
+ ---[m
+ [m
+[32m+[m[32m## 🧪 Hardened Test Suite[m
+[32m+[m
+[32m+[m[32mThe project implements a fast, comprehensive Vitest execution environment. Run tests via:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32m# Run the entire test suite (128 passing tests)[m
+[32m+[m[32mnpm test[m
+[32m+[m
+[32m+[m[32m# Run tests in interactive watch mode[m
+[32m+[m[32mnpm run test:watch[m
+[32m+[m
+[32m+[m[32m# Generate code coverage reports[m
+[32m+[m[32mnpm run test:coverage[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m### Coverage Scope:[m
+[32m+[m[32m* **`tests/utils.test.ts` & `tests/backendUtils.test.ts`:** URL parsing, normalization logic, and ATS platform detection checks.[m
+[32m+[m[32m* **`tests/clientScraper.test.ts`:** In-page scrapers (Greenhouse, Lever, and Fallback DOM extractions) mocked using lightweight mock-DOM nodes.[m
+[32m+[m[32m* **`tests/server.test.ts`:** Express.js API integration tests utilizing `supertest`, mocking Database client, Redis, and BullMQ channels for zero-network execution.[m
+[32m+[m[32m* **`tests/voyagerParser.test.ts` & `tests/matchScoring.test.ts`:** LinkedIn intercepted responses and heuristic matching scoring.[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+ ## 🚀 Setup & Installation[m
+ [m
+ ### 1. Database Setup[m
+ Ensure PostgreSQL is running and has the `pgvector` extension enabled.[m
+ [m
+ ### 2. Backend Configuration[m
+[31m-Navigate into the backend directory:[m
+[32m+[m[32mNavigate into the backend directory and install dependencies:[m
+ ```bash[m
+ cd jobtracker-backend[m
+ npm install[m
+[36m@@ -183,11 +202,9 @@[m [mREDIS_URL="redis://127.0.0.1:6379"[m
+ AWS_ACCESS_KEY_ID="your-key"[m
+ AWS_SECRET_ACCESS_KEY=
