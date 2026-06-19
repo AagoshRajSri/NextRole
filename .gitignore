@@ -41,3 +41,10 @@ jobtracker-backend/dist
 
 
 /generated/prisma
+]633;E;{   echo ""\x3b   echo "# ------- Sensitive / generated files -------"\x3b   echo ".env"\x3b   echo ".env.*"\x3b   echo ".vscode/"\x3b   echo "node_modules/"\x3b   echo "dist/"\x3b } >> .gitignore;2f0cd28c-dba2-4fb9-9b63-eddcb9ed6333]633;C
+# ------- Sensitive / generated files -------
+.env
+.env.*
+.vscode/
+node_modules/
+dist/
