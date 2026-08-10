@@ -7,6 +7,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     exclude: ['node_modules', '.output', '.wxt', 'jobtracker-backend/node_modules'],
+    setupFiles: ['./tests/setup.ts'],
     reporters: ['verbose'],
     coverage: {
       provider: 'v8',
@@ -16,7 +17,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      // Allow tests to import lib/* without .js extension
+      'wxt/storage': path.resolve(__dirname, 'node_modules/wxt/dist/utils/storage.mjs'),
+      'wxt/browser': path.resolve(__dirname, 'node_modules/wxt/dist/browser.mjs'),
       '~': path.resolve(__dirname, '.'),
       '@prisma/client': path.resolve(__dirname, 'jobtracker-backend/node_modules/@prisma/client'),
       'ioredis': path.resolve(__dirname, 'jobtracker-backend/node_modules/ioredis'),

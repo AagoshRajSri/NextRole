@@ -10,11 +10,9 @@
  * NodeNext module resolution we reference it with a relative path from the
  * tests directory. Vitest resolves it correctly without the .js extension.
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   jobMatchesPrefs,
-  encryptData,
-  decryptData,
   normalizeCareerUrl,
   detectPlatform,
   extractCompanyFromUrl,
@@ -116,56 +114,6 @@ describe('jobMatchesPrefs — null safety', () => {
   });
 });
 
-// ─── encryptData / decryptData ────────────────────────────────────────────────
-describe('encryptData / decryptData', () => {
-  const plaintext = JSON.stringify({ li_at: 'test-session-cookie-value', JSESSIONID: 'abc123' });
-
-  it('produces a non-empty ciphertext different from the plaintext', () => {
-    const cipher = encryptData(plaintext);
-    expect(cipher).toBeTruthy();
-    expect(cipher).not.toBe(plaintext);
-  });
-
-  it('produces output in iv:authTag:encrypted format (3 colon-separated parts)', () => {
-    const cipher = encryptData(plaintext);
-    const parts = cipher.split(':');
-    expect(parts).toHaveLength(3);
-    // iv = 16 bytes = 32 hex chars
-    expect(parts[0]).toHaveLength(32);
-    // authTag = 16 bytes = 32 hex chars
-    expect(parts[1]).toHaveLength(32);
-  });
-
-  it('round-trips correctly — decrypt(encrypt(x)) === x', () => {
-    const cipher = encryptData(plaintext);
-    const decrypted = decryptData(cipher);
-    expect(decrypted).toBe(plaintext);
-  });
-
-  it('two encryptions of same text produce different ciphertexts (random IV)', () => {
-    const c1 = encryptData(plaintext);
-    const c2 = encryptData(plaintext);
-    expect(c1).not.toBe(c2);
-  });
-
-  it('decryptData returns null for invalid input', () => {
-    expect(decryptData('not:valid')).toBeNull();
-    expect(decryptData('')).toBeNull();
-    expect(decryptData('a:b:c')).toBeNull(); // wrong lengths
-  });
-
-  it('decryptData returns null for tampered ciphertext', () => {
-    const cipher = encryptData(plaintext);
-    const parts = cipher.split(':');
-    // flip a byte in the encrypted payload
-    parts[2] = parts[2].slice(0, -2) + '00';
-    expect(decryptData(parts.join(':'))).toBeNull();
-  });
-
-  it('encryptData returns empty string for empty input', () => {
-    expect(encryptData('')).toBe('');
-  });
-});
 
 // ─── normalizeCareerUrl (backend copy must match lib/utils.ts) ───────────────
 describe('backend normalizeCareerUrl — parity with lib/utils.ts', () => {

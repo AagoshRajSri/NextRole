@@ -11,6 +11,8 @@ import {
   unseenJobsStorage,
   dismissedJobIdsStorage,
   extractReadableLabel,
+  TrackedPage,
+  StoredJob,
 } from './storage';
 import { normalizeCareerUrl, detectPlatform } from './utils';
 import { ApiClient } from './apiClient';
@@ -87,7 +89,7 @@ export async function routeMessage(
       if (!url) return;
       const normalized = normalizeCareerUrl(url);
       const pages = await trackedPagesStorage.getValue() || [];
-      if (pages.find(p => p.normalizedUrl === normalized)) return { exists: true };
+      if (pages.find((p: TrackedPage) => p.normalizedUrl === normalized)) return { exists: true };
       pages.push({
         id: crypto.randomUUID(), url, normalizedUrl: normalized,
         label: extractReadableLabel(url).title, subtitle: extractReadableLabel(url).subtitle,
@@ -104,7 +106,7 @@ export async function routeMessage(
 
     case 'DELETE_TRACKED_SEARCH': {
       const pages = await trackedPagesStorage.getValue() || [];
-      await trackedPagesStorage.setValue(pages.filter(p => p.id !== message.id));
+      await trackedPagesStorage.setValue(pages.filter((p: TrackedPage) => p.id !== message.id));
       return { success: true };
     }
 
@@ -124,7 +126,7 @@ export async function routeMessage(
       const release = await deps.storageLock.acquire();
       try {
         const jobs = await unseenJobsStorage.getValue() || [];
-        await unseenJobsStorage.setValue(jobs.map(j => j.id === message.jobId ? { ...j, seenAt: Date.now() } : j));
+        await unseenJobsStorage.setValue(jobs.map((j: StoredJob) => j.id === message.jobId ? { ...j, seenAt: Date.now() } : j));
       } finally { release(); }
       await deps.updateBadge();
       return { success: true };
@@ -134,7 +136,7 @@ export async function routeMessage(
       const release = await deps.storageLock.acquire();
       try {
         const jobs = await unseenJobsStorage.getValue() || [];
-        await unseenJobsStorage.setValue(jobs.map(j => j.seenAt ? j : { ...j, seenAt: Date.now() }));
+        await unseenJobsStorage.setValue(jobs.map((j: StoredJob) => j.seenAt ? j : { ...j, seenAt: Date.now() }));
       } finally { release(); }
       await deps.updateBadge();
       return { success: true };
@@ -144,7 +146,7 @@ export async function routeMessage(
       const release = await deps.storageLock.acquire();
       try {
         const jobs = await unseenJobsStorage.getValue() || [];
-        await unseenJobsStorage.setValue(jobs.map(j => j.id === message.jobId ? { ...j, dismissed: true } : j));
+        await unseenJobsStorage.setValue(jobs.map((j: StoredJob) => j.id === message.jobId ? { ...j, dismissed: true } : j));
         const dismissed = await dismissedJobIdsStorage.getValue() || [];
         if (!dismissed.includes(message.jobId)) await dismissedJobIdsStorage.setValue([...dismissed, message.jobId]);
       } finally { release(); }
@@ -157,7 +159,7 @@ export async function routeMessage(
       try {
         const until = message.duration === 'tomorrow' ? Date.now() + 86400000 : Date.now() + 3600000;
         const jobs = await unseenJobsStorage.getValue() || [];
-        await unseenJobsStorage.setValue(jobs.map(j => j.id === message.jobId ? { ...j, snoozedUntil: until } : j));
+        await unseenJobsStorage.setValue(jobs.map((j: StoredJob) => j.id === message.jobId ? { ...j, snoozedUntil: until } : j));
       } finally { release(); }
       return { success: true };
     }
@@ -175,6 +177,20 @@ export async function routeMessage(
 
     case 'GET_SOCKET_STATUS': {
       return { connected: deps.getSocketStatus() };
+    }
+
+    case 'GET_TAB_ID': {
+      // Content scripts cannot read their own tab ID directly.
+      // They send this message; background replies with sender.tab.id.
+      return { tabId: sender?.tab?.id ?? null };
+    }
+
+    case 'CLOSE_CURRENT_TAB': {
+      if (sender?.tab?.id) {
+        browser.tabs.remove(sender.tab.id).catch(err => logger.warn('msg', 'Failed to close tab', err));
+        return { success: true };
+      }
+      return { success: false };
     }
 
     default:

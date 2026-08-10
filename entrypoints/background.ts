@@ -26,6 +26,7 @@ import { scoreJobAgainstProfile } from '../lib/matcher';
 // [NEXTROLE-V1-NEW]
 import { addJobs, getJobStore, saveJobStore, saveFollowedCompanies, getNewJobCount, clearOldJobs, markJobSeen, markJobApplied } from '../lib/jobStore';
 import type { JobCard, FollowedCompany } from '../lib/jobStore';
+import { seenJobIdsStorage } from '../lib/storage';
 
 const notificationLinks = new Map<string, string>();
 // [NEXTROLE-V1-NEW]
@@ -52,7 +53,7 @@ export default defineBackground(() => {
     try {
       const monitorState = await monitorStateStorage.getValue();
       const jobs = await unseenJobsStorage.getValue() || [];
-      const atsCount = jobs.filter(j => !j.seenAt && !j.dismissed).length;
+      const atsCount = jobs.filter((j: StoredJob) => !j.seenAt && !j.dismissed).length;
       const liCount = await getNewJobCount();
       const count = atsCount + liCount;
 
@@ -108,14 +109,14 @@ export default defineBackground(() => {
         const release = await storageLock.acquire();
         try {
           const jobs = await unseenJobsStorage.getValue() ?? [];
-          await unseenJobsStorage.setValue(jobs.map(j => j.id === jobId ? { ...j, seenAt: Date.now() } : j));
+          await unseenJobsStorage.setValue(jobs.map((j: StoredJob) => j.id === jobId ? { ...j, seenAt: Date.now() } : j));
         } finally { release(); }
       } else if (btnIdx === 1) {
         const jobId = notifId.replace('job-', '');
         const release = await storageLock.acquire();
         try {
           const jobs = await unseenJobsStorage.getValue() ?? [];
-          await unseenJobsStorage.setValue(jobs.map(j => j.id === jobId ? { ...j, snoozedUntil: Date.now() + 3600000 } : j));
+          await unseenJobsStorage.setValue(jobs.map((j: StoredJob) => j.id === jobId ? { ...j, snoozedUntil: Date.now() + 3600000 } : j));
         } finally { release(); }
       }
       browser.notifications.clear(notifId);
@@ -144,7 +145,7 @@ export default defineBackground(() => {
         await browser.tabs.create({ url: entry.jobUrl });
       } else if (notifId.startsWith('job-')) {
         const jobs = await unseenJobsStorage.getValue() ?? [];
-        const job = jobs.find(j => j.id === notifId.replace('job-', ''));
+        const job = jobs.find((j: StoredJob) => j.id === notifId.replace('job-', ''));
         if (job?.url) await browser.tabs.create({ url: job.url });
       }
     } catch (err) {
@@ -153,8 +154,37 @@ export default defineBackground(() => {
     browser.notifications.clear(notifId);
   });
 
+  // ── DEDUPLICATION (NOTIFICATIONS) ──
+  async function filterAlreadyNotified<T extends { id: string }>(jobs: T[], hasLock = false): Promise<T[]> {
+    const release = hasLock ? () => {} : await storageLock.acquire();
+    try {
+      const seenMap = await seenJobIdsStorage.getValue() || {};
+      const now = Date.now();
+      const result: T[] = [];
+      let changed = false;
+
+      for (const j of jobs) {
+        if (!seenMap[j.id]) {
+          seenMap[j.id] = now;
+          result.push(j);
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        await seenJobIdsStorage.setValue(seenMap);
+      }
+      return result;
+    } finally {
+      release();
+    }
+  }
+
   // ── SCAN RESULT HANDLER (with AsyncLock) ──
-  async function handleScanResult(payload: { url: string; platform: string; jobs: any[]; scannedAt: number }, tabId?: number) {
+  async function handleScanResult(
+    payload: { url: string; platform: string; jobs: any[]; scannedAt: number; strategy?: string; sourceMode?: string },
+    tabId?: number
+  ) {
     const profile = await profileStorage.getValue();
     if (!profile) return;
 
@@ -162,11 +192,11 @@ export default defineBackground(() => {
     try {
       const trackedPages = await trackedPagesStorage.getValue() || [];
       const normalizedUrl = normalizeCareerUrl(payload.url);
-      const trackedPage = trackedPages.find(p => p.normalizedUrl === normalizedUrl);
+      const trackedPage = trackedPages.find((p: TrackedPage) => p.normalizedUrl === normalizedUrl);
 
       const unseenJobs = await unseenJobsStorage.getValue() || [];
       const dismissedIds = await dismissedJobIdsStorage.getValue() || [];
-      const seenIds = new Set([...unseenJobs.map(j => j.id), ...dismissedIds]);
+      const seenIds = new Set([...unseenJobs.map((j: StoredJob) => j.id), ...dismissedIds]);
 
       const newJobs = payload.jobs.filter(j => !seenIds.has(buildJobId(j, payload.url)));
       if (newJobs.length === 0) {
@@ -211,7 +241,14 @@ export default defineBackground(() => {
       const updatedJobs = [...storedJobs, ...unseenJobs].slice(0, 500);
       await unseenJobsStorage.setValue(updatedJobs);
 
-      if (trackedPage) await updateTrackedPageStatus(trackedPage.id, payload.scannedAt, 'ok', deduped.length);
+      // Log a warning when the heuristic fallback parser was used — quality may be lower
+      if (payload.strategy === 'heuristic-fallback') {
+        logger.warn('scan', `⚠ Heuristic fallback used for ${payload.platform} @ ${payload.url} — selector map may be stale`);
+        // Mark the tracked page so the popup can surface it
+        if (trackedPage) await updateTrackedPageStatus(trackedPage.id, payload.scannedAt, 'heuristic', deduped.length);
+      } else {
+        if (trackedPage) await updateTrackedPageStatus(trackedPage.id, payload.scannedAt, 'ok', deduped.length);
+      }
 
       const ms = await monitorStateStorage.getValue();
       if (ms) {
@@ -219,7 +256,11 @@ export default defineBackground(() => {
       }
 
       await updateBadge();
-      await fireNotifications(storedJobs, profile);
+
+      const toNotify = await filterAlreadyNotified(storedJobs, true);
+      if (toNotify.length > 0) {
+        await fireNotifications(toNotify, profile);
+      }
 
       if (tabId) {
         browser.tabs.sendMessage(tabId, { type: 'NEW_JOBS_FOR_PAGE', payload: { url: payload.url, jobs: storedJobs } }).catch(err => logger.warn('scan', 'Failed to send jobs to tab', err));
@@ -233,7 +274,7 @@ export default defineBackground(() => {
 
   async function updateTrackedPageStatus(id: string, scannedAt: number, status: string, newCount: number) {
     const pages = await trackedPagesStorage.getValue() || [];
-    const idx = pages.findIndex(p => p.id === id);
+    const idx = pages.findIndex((p: TrackedPage) => p.id === id);
     if (idx >= 0) {
       pages[idx] = { ...pages[idx], lastScrapedAt: scannedAt, lastScrapeStatus: status as any, newJobCount: (pages[idx].newJobCount || 0) + newCount };
       await trackedPagesStorage.setValue(pages);
@@ -268,7 +309,7 @@ export default defineBackground(() => {
       const { urls, displayName } = getCompanyTrackingUrls(company);
       for (const url of urls) {
         const normalized = normalizeCareerUrl(url);
-        if (!pages.find(p => p.normalizedUrl === normalized)) {
+        if (!pages.find((p: TrackedPage) => p.normalizedUrl === normalized)) {
           const newPage: TrackedPage = {
             id: crypto.randomUUID(),
             url,
@@ -324,7 +365,7 @@ export default defineBackground(() => {
     try {
       const jobs = await unseenJobsStorage.getValue() || [];
       const thirtyDaysAgo = Date.now() - 30 * 86400000;
-      const pruned = jobs.filter(j => {
+      const pruned = jobs.filter((j: StoredJob) => {
         if (!j.seenAt) return true;
         if (j.appliedAt) return true;
         return j.seenAt > thirtyDaysAgo;
@@ -336,13 +377,38 @@ export default defineBackground(() => {
     } finally { release(); }
   }
 
+  async function pruneSeenJobIds() {
+    const release = await storageLock.acquire();
+    try {
+      const seenMap = await seenJobIdsStorage.getValue() || {};
+      const now = Date.now();
+      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+      let changed = false;
+      
+      for (const id in seenMap) {
+        if (now - seenMap[id] > THIRTY_DAYS) {
+          delete seenMap[id];
+          changed = true;
+        }
+      }
+      
+      if (changed) {
+        await seenJobIdsStorage.setValue(seenMap);
+      }
+    } catch (e) {
+      logger.warn('prune', 'Failed to prune seen job ids', e);
+    } finally {
+      release();
+    }
+  }
+
   // ── TAB HELPERS ──
   async function getOpenTrackedTabs(): Promise<Array<{ tab: any; trackedPage: TrackedPage }>> {
     const [allTabs, trackedPages] = await Promise.all([browser.tabs.query({}), trackedPagesStorage.getValue()]);
     const results: Array<{ tab: any; trackedPage: TrackedPage }> = [];
     for (const tab of allTabs) {
       if (!tab.url || !tab.id) continue;
-      const tp = (trackedPages || []).find(p => p.normalizedUrl === normalizeCareerUrl(tab.url!));
+      const tp = (trackedPages || []).find((p: TrackedPage) => p.normalizedUrl === normalizeCareerUrl(tab.url!));
       if (tp) results.push({ tab, trackedPage: tp });
     }
     return results;
@@ -415,27 +481,35 @@ export default defineBackground(() => {
       (monitorConfig.location ? [monitorConfig.location as string] : [])
     ).filter(Boolean)
 
-    
-    // [NEXTROLE-FIX-B3] Touch storage to prevent SW from sleeping mid-scan
-    const keepAliveInterval = setInterval(async () => {
-      await browser.storage.local.set({ _nr_sw_ping: Date.now() })
-    }, 20000) // every 20s during scan
-scanInProgress = true
+    // [COMMENT] MV3 workers terminate after ~30s idle; alarms are the supported wake mechanism.
+    // We checkpoint progress to chrome.storage.session so we can resume cleanly if terminated.
+    scanInProgress = true
     await browser.storage.local.set({ nr_scanning: true })
 
     try {
       const linkedInTab = linkedInTabs[0]
       if (!linkedInTab.id) return
 
-      // Chunk companies to avoid rate limit (scan max 8 companies per 5-minute cycle)
-      const MAX_COMPANIES_PER_CYCLE = 8;
-      const companiesToScan = [...store.followedCompanies]
-        .sort((a, b) => (a.lastScannedAt || 0) - (b.lastScannedAt || 0))
-        .slice(0, MAX_COMPANIES_PER_CYCLE);
+      // Load checkpoint or start fresh
+      const sessionData = await browser.storage.session.get('linkedInScanState') as any;
+      let scanState = sessionData.linkedInScanState || { index: 0, companies: null };
 
-      console.log(`[NextRole:Scan] Scanning ${companiesToScan.length} companies out of ${store.followedCompanies.length}`);
+      if (!scanState.companies || forceRun) {
+        const MAX_COMPANIES_PER_CYCLE = 8;
+        scanState.companies = [...store.followedCompanies]
+          .sort((a, b) => (a.lastScannedAt || 0) - (b.lastScannedAt || 0))
+          .slice(0, MAX_COMPANIES_PER_CYCLE);
+        scanState.index = 0;
+      }
 
-      for (const company of companiesToScan) {
+      console.log(`[NextRole:Scan] Scanning ${scanState.companies.length} companies out of ${store.followedCompanies.length} (resuming from index ${scanState.index})`);
+
+      for (let i = scanState.index; i < scanState.companies.length; i++) {
+        const company = scanState.companies[i];
+        
+        // Checkpoint progress
+        await browser.storage.session.set({ linkedInScanState: { index: i, companies: scanState.companies } });
+
         // Jitter: 2-5 seconds between companies to emulate human behavior
         const jitter = Math.random() * 3000 + 2000
         await new Promise(resolve => setTimeout(resolve, jitter))
@@ -458,6 +532,9 @@ scanInProgress = true
         }
       }
 
+      // Clear checkpoint on successful completion
+      await browser.storage.session.remove('linkedInScanState');
+
       // Update overall lastScannedAt
       const finalStore = await getJobStore()
       finalStore.lastScannedAt = Date.now()
@@ -467,7 +544,6 @@ scanInProgress = true
       await clearOldJobs()
 
     } finally {
-      clearInterval(keepAliveInterval)
       scanInProgress = false
       await browser.storage.local.set({ nr_scanning: false })
 
@@ -488,6 +564,7 @@ scanInProgress = true
     // LinkedIn feature handlers
     if (message.type === 'ONBOARDING_COMPLETE') {
       logger.info('onboarding', 'Onboarding complete, setting up alarm');
+      // Chrome packed builds clamp alarm periods to >= 1 minute. 5 min is safe.
       browser.alarms.create('LINKEDIN_PAGES_SCAN', { periodInMinutes: 5 });
       return true;
     }
@@ -558,9 +635,11 @@ scanInProgress = true
 
         console.log(`[NextRole:BG] ${newJobs.length} new jobs from ${companyName}`)
 
+        const toNotify = await filterAlreadyNotified(newJobs, false)
+
         // Fire a notification for each new job (cap at 3 per scan to avoid spam)
-        const toNotify = newJobs.slice(0, 3)
-        for (const job of toNotify) {
+        const sliced = toNotify.slice(0, 3)
+        for (const job of sliced) {
           const notifId = `nr-job-${job.id}-${Date.now()}`
           notificationJobMap.set(notifId, job.applyUrl)
 
@@ -573,11 +652,11 @@ scanInProgress = true
           })
         }
 
-        if (newJobs.length > 3) {
+        if (toNotify.length > 3) {
           browser.notifications.create(`nr-batch-${Date.now()}`, {
             type: 'basic',
             iconUrl: browser.runtime.getURL('/icon/128.png'),
-            title: `${newJobs.length} new matching jobs found`,
+            title: `${toNotify.length} new matching jobs found`,
             message: `Open NextRole to view all matches`
           })
         }
@@ -617,8 +696,11 @@ scanInProgress = true
 
   // ── ALARMS ──
   browser.alarms.onAlarm.addListener(async (alarm) => {
-    if (alarm.name.startsWith('notif-keepalive-')) { browser.alarms.clear(alarm.name); return; }
-    if (alarm.name === DAILY_PRUNE) { await pruneOldJobs(); return; }
+    if (alarm.name === DAILY_PRUNE) { 
+      await pruneOldJobs(); 
+      await pruneSeenJobIds();
+      return; 
+    }
     // [NEXTROLE-V1-NEW]
     if (alarm.name === 'LINKEDIN_PAGES_SCAN') { 
       await runLinkedInScan(false); // false = respect rate limit
@@ -661,8 +743,8 @@ scanInProgress = true
 
       // Merge into local storage, deduplicating by id OR url
       const existingJobs = await unseenJobsStorage.getValue() || [];
-      const existingIds = new Set(existingJobs.map(j => j.id));
-      const existingUrls = new Set(existingJobs.map(j => j.url).filter(Boolean));
+      const existingIds = new Set(existingJobs.map((j: StoredJob) => j.id));
+      const existingUrls = new Set(existingJobs.map((j: StoredJob) => j.url).filter(Boolean));
 
       const brandNew: StoredJob[] = data
         .filter(j => !existingIds.has(j.id) && !existingUrls.has(j.url))
@@ -688,7 +770,11 @@ scanInProgress = true
 
       await unseenJobsStorage.setValue([...brandNew, ...existingJobs].slice(0, 500));
       await updateBadge();
-      await fireNotifications(brandNew, profile);
+      
+      const toNotify = await filterAlreadyNotified(brandNew, false);
+      if (toNotify.length > 0) {
+        await fireNotifications(toNotify, profile);
+      }
     } catch (err) {
       logger.warn('poll', 'Backend poll failed', err);
     }
@@ -699,7 +785,7 @@ scanInProgress = true
     const pages = await trackedPagesStorage.getValue() || []
     let changed = false
     
-    const upgraded = pages.map(page => {
+    const upgraded = pages.map((page: TrackedPage) => {
       const platform = detectPlatform(page.url)
       const sortedUrl = injectSortParam(page.url, platform)
       
@@ -768,11 +854,15 @@ scanInProgress = true
 
       const jobs = await unseenJobsStorage.getValue() || [];
       // Dedup by URL (not just by id) — handles client-scanned jobs with different ID format
-      const isDuplicate = jobs.some(j => j.id === job.id || j.url === job.url);
+      const isDuplicate = jobs.some((j: StoredJob) => j.id === job.id || j.url === job.url);
       if (!isDuplicate) {
         await unseenJobsStorage.setValue([newJob, ...jobs].slice(0, 500));
         await updateBadge();
-        await fireNotifications([newJob], profile);
+        
+        const toNotify = await filterAlreadyNotified([newJob], false);
+        if (toNotify.length > 0) {
+          await fireNotifications(toNotify, profile);
+        }
       }
     });
   }
@@ -791,47 +881,29 @@ scanInProgress = true
     }
   };
 
-  const syncSessionCookies = async () => {
-    try {
-      const storage = await browser.storage.local.get('lastCookieSync') as any;
-      const now = Date.now();
-      if (storage.lastCookieSync && now - storage.lastCookieSync < 12 * 60 * 60 * 1000) {
-        logger.info('cookies', 'Cookie sync skipped (deduplicated)');
-        return;
-      }
 
-      const domains = ['.linkedin.com', 'linkedin.com', '.myworkdayjobs.com', '.greenhouse.io', '.lever.co'];
-      const cookies = [];
-      
-      for (const domain of domains) {
-        const domainCookies = await browser.cookies.getAll({ domain });
-        cookies.push(...domainCookies);
-      }
-      
-      if (cookies.length > 0) {
-        const userId = await getUserId();
-        const apiClient = new ApiClient(userId);
-        await apiClient.post('/api/cookies', { cookies });
-        await browser.storage.local.set({ lastCookieSync: now });
-        logger.info('cookies', `Synced ${cookies.length} session cookies`);
-      }
-    } catch (err) {
-      logger.warn('cookies', 'Failed to sync session cookies', err);
-    }
-  };
 
   const setupAlarms = async () => {
     const ms = await monitorStateStorage.getValue();
+
+    // Chrome enforces a minimum alarm period of 1 minute in packed (Web Store)
+    // builds — any value below 1 is silently clamped up to 1.  All periods here
+    // are >= 1 min so there is no discrepancy between dev-mode and production.
+
+    // Poll the backend for new jobs every 15 minutes.
     if (ms?.active) browser.alarms.create(POLL_ALARM, { periodInMinutes: 15 });
+
+    // Prune stale seen-jobs and unseen-jobs storage once per day.
     browser.alarms.create(DAILY_PRUNE, { periodInMinutes: 1440 });
+
     // [NEXTROLE-V1-NEW]
-    // FREE TIER: 5-minute scan cycle
-    // PREMIUM TODO: replace with real-time Voyager WebSocket intercept (V2)
+    // Scan open LinkedIn tabs every 5 minutes (free-tier polling).
+    // PREMIUM TODO: replace with real-time Voyager WebSocket intercept (V2).
     browser.alarms.create('LINKEDIN_PAGES_SCAN', { periodInMinutes: 5 });
     await updateBadge();
     upgradeSortParams().catch(err => logger.warn('startup', 'upgradeSortParams failed', err));
     syncRemoteSelectors().catch(err => logger.warn('startup', 'syncRemoteSelectors failed', err));
-    syncSessionCookies().catch(err => logger.warn('startup', 'syncSessionCookies failed', err));
+
     connectSocket().catch(err => logger.warn('startup', 'connectSocket failed', err));
   };
   browser.runtime.onStartup.addListener(async () => {
@@ -846,21 +918,8 @@ scanInProgress = true
     // Manual WXT content script injection removed to prevent postinstall race condition.
   });
 
-// [NEXTROLE-FIX-B3] Keep service worker alive while LinkedIn tabs are open
-browser.tabs.onActivated.addListener(async (activeInfo) => {
-  try {
-    const tab = await browser.tabs.get(activeInfo.tabId)
-    if (tab.url?.includes('linkedin.com')) {
-      await browser.storage.local.set({ _nr_sw_heartbeat: Date.now() })
-    }
-  } catch {}
-})
-
-browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url?.includes('linkedin.com')) {
-    await browser.storage.local.set({ _nr_sw_heartbeat: Date.now() })
-  }
-  // [NEXTROLE-FIX] Re-inject on LinkedIn SPA navigation to mynetwork pages
+  browser.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    // [NEXTROLE-FIX] Re-inject on LinkedIn SPA navigation to mynetwork pages
   if (
     changeInfo.status === 'complete' &&
     tab.url?.includes('linkedin.com/mynetwork')

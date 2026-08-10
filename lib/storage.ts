@@ -1,3 +1,5 @@
+import { storage } from 'wxt/utils/storage';
+
 // ────────────────────────────────────────────────────────
 // TYPES (single source of truth)
 // ────────────────────────────────────────────────────────
@@ -28,7 +30,7 @@ export interface TrackedPage {
   subtitle: string;
   addedAt: number;
   lastScrapedAt: number | null;
-  lastScrapeStatus: 'ok' | 'empty' | 'error' | 'pending' | 'blocked' | 'partial' | null;
+  lastScrapeStatus: 'ok' | 'empty' | 'error' | 'pending' | 'blocked' | 'partial' | 'heuristic' | null;
   lastScrapeError: string | null;
   newJobCount: number;
   isPending: boolean;
@@ -100,6 +102,15 @@ export const remoteSelectorsStorage = storage.defineItem<Record<string, any>>('l
 
 export const userIdStorage = storage.defineItem<string | null>('local:userId', {
   fallback: null,
+});
+
+export const autoCloseScanTabStorage = storage.defineItem<boolean>('local:autoCloseScanTab', {
+  fallback: false,
+});
+
+// Used for tracking jobs that have already triggered a notification across all tabs
+export const seenJobIdsStorage = storage.defineItem<Record<string, number>>('session:seenJobIds', {
+  fallback: {},
 });
 
 // ────────────────────────────────────────────────────────

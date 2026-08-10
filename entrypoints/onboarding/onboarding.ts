@@ -64,7 +64,7 @@ async function showDashboard(profile: UserProfile) {
     monitorStateStorage.getValue(),
   ]);
   const initials = getInitials(profile.name);
-  const recentJobs = (jobs ?? []).filter(j => !j.dismissed).slice(0, 5);
+  const recentJobs = (jobs ?? []).filter((j: import('../../lib/storage').StoredJob) => !j.dismissed).slice(0, 5);
 
   setRoot(`
     <div class="dashboard">
@@ -121,7 +121,7 @@ async function showDashboard(profile: UserProfile) {
         <div class="section-title">Tracked Pages</div>
         ${(pages ?? []).length === 0
           ? '<div class="empty-hint">No pages tracked yet — visit a careers page and click "+ Track"</div>'
-          : (pages ?? []).map(p => `
+          : (pages ?? []).map((p: import('../../lib/storage').TrackedPage) => `
             <div class="page-row">
               <div class="page-avatar">${p.label.charAt(0).toUpperCase()}</div>
               <div class="page-info">
@@ -137,7 +137,7 @@ async function showDashboard(profile: UserProfile) {
       ${recentJobs.length > 0 ? `
         <div class="section-card">
           <div class="section-title">Recent Matches</div>
-          ${recentJobs.map(j => `
+          ${recentJobs.map((j: import('../../lib/storage').StoredJob) => `
             <div class="job-row" data-url="${esc(j.url)}">
               <div class="job-title">${esc(j.title)}</div>
               <div class="job-meta">${esc(j.companyName)} · ${esc(j.location)} · <span class="match-chip">${esc(j.matchReason)}</span></div>
@@ -163,7 +163,7 @@ async function showDashboard(profile: UserProfile) {
     btn.addEventListener('click', async () => {
       const id = (btn as HTMLElement).dataset.id!;
       const pages = await trackedPagesStorage.getValue() ?? [];
-      await trackedPagesStorage.setValue(pages.filter(p => p.id !== id));
+      await trackedPagesStorage.setValue(pages.filter((p: import('../../lib/storage').TrackedPage) => p.id !== id));
       fetch(`${API_BASE}/api/tracked-searches/${id}`, { method: 'DELETE' }).catch(() => {});
       const updated = await profileStorage.getValue();
       if (updated) await showDashboard(updated);

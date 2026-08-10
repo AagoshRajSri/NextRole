@@ -6,6 +6,7 @@ import {
   isCareerPage,
   StoredJob,
   remoteSelectorsStorage,
+  autoCloseScanTabStorage,
 } from '../lib/storage';
 import { detectPlatform, injectSortParam, hasSortParam, normalizeCareerUrl } from '../lib/utils';
 import { extractFollowedCompaniesDom, isLinkedInPagesUrl, isFollowedCompaniesApiUrl, parseFollowedCompaniesResponse } from '../lib/slugExtractor';
@@ -30,6 +31,23 @@ export default defineContentScript({
       // do not return here - let the rest of the content script run
     }
 
+    let hiddenSince: number | null = document.visibilityState === 'hidden' ? Date.now() : null;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenSince = Date.now();
+      } else {
+        hiddenSince = null;
+      }
+    });
+
+    function isScanPaused(): boolean {
+      if (document.visibilityState === 'hidden' && hiddenSince && (Date.now() - hiddenSince > 60000)) {
+        return true;
+      }
+      return false;
+    }
+
+
     // [NEXTROLE-FIX-B2] Safe message sender that silently handles inactive service worker
     async function safeSendMessage(message: object): Promise<void> {
       try {
@@ -47,6 +65,9 @@ export default defineContentScript({
       }
     }
     // [NEXTROLE-FIX-B1] — Voyager API intercept
+    // NOTE: This interceptor only works because it observes responses already
+    // delivered to the user's own logged-in tab. It must never run outside a
+    // live, foreground tab session.
     ;(function installFetchIntercept() {
       if ((window as any).__nr_fetch_intercepted) return
       ;(window as any).__nr_fetch_intercepted = true
@@ -54,6 +75,7 @@ export default defineContentScript({
       const _originalFetch = window.fetch.bind(window)
       window.fetch = async function(...args: Parameters<typeof fetch>) {
         const response = await _originalFetch(...args)
+        if (isScanPaused()) return response;
 
         try {
           let url = ''
@@ -129,7 +151,7 @@ export default defineContentScript({
 
             safeSendMessage({
               type: 'VOYAGER_JOB_DATA',
-              payload: { rawJson, companySlug: slug, companyName: slug, companyLogoUrl: '' }
+              payload: { rawJson, companySlug: slug, companyName: slug, companyLogoUrl: '', sourceMode: 'live-tab' }
             })
           }).catch(() => {})
 
@@ -470,7 +492,7 @@ export default defineContentScript({
     // CLIENT-SIDE SCAN
     // ──────────────────────────────────────────────────
     async function runPageScanWithRetry(maxRetries = 3, retryDelayMs = 2000) {
-      if (isScanInProgress) return;
+      if (isScanInProgress || isScanPaused()) return;
       isScanInProgress = true;
       lastScannedUrl = window.location.href;
       setPillState('loading');
@@ -495,6 +517,29 @@ export default defineContentScript({
           }
         }
 
+        // Determine once whether this tab was opened via "Check Now" (popup).
+        // Content scripts cannot access their own tab ID directly, so we ask
+        // the background worker via message.  The flag is stored in session
+        // storage (keyed by tab ID) and cleared on first read so it never
+        // leaks into a later manual visit to the same tab.
+        let isAutoScanTab = false;
+        try {
+          const tabRes = (await safeSendMessage({ type: 'GET_TAB_ID' }) as unknown) as { tabId?: number } | null;
+          const tabId = tabRes?.tabId;
+          if (tabId != null) {
+            const key = `pendingAutoScan:${tabId}`;
+            const stored = await browser.storage.session.get(key) as Record<string, unknown>;
+            if (stored[key]) {
+              isAutoScanTab = true;
+              // Clear immediately so subsequent navigations in the same tab
+              // don't inherit the "auto-scan" behaviour.
+              await browser.storage.session.remove(key);
+            }
+          }
+        } catch {
+          // Non-fatal: falls back to isAutoScanTab = false (no auto-close).
+        }
+
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
           if (attempt > 0) {
             await new Promise(r => setTimeout(r, retryDelayMs * attempt));
@@ -507,13 +552,25 @@ export default defineContentScript({
           lastScanTime = Date.now();
           lastScanPlatform = result.platform;
 
+          async function checkAutoClose() {
+            // Use session-storage flag instead of URL query param — the ATS
+            // site never sees an unrecognized parameter this way.
+            if (isAutoScanTab) {
+              const shouldClose = await autoCloseScanTabStorage.getValue();
+              if (shouldClose) {
+                await safeSendMessage({ type: 'CLOSE_CURRENT_TAB' });
+              }
+            }
+          }
+
           if (result.jobs.length > 0) {
             await safeSendMessage({
               type: 'PAGE_SCAN_RESULT',
-              payload: { url: window.location.href, platform: result.platform, jobs: result.jobs, scannedAt: lastScanTime }
+              payload: { url: window.location.href, platform: result.platform, jobs: result.jobs, scannedAt: lastScanTime, sourceMode: 'live-tab', strategy: result.strategy }
             });
             setPillState(isTracked ? 'tracking' : 'available');
             renderHudContent();
+            await checkAutoClose();
             return;
           }
 
@@ -521,7 +578,7 @@ export default defineContentScript({
           if (!isSpaPlatform || attempt === maxRetries) {
             await safeSendMessage({
               type: 'PAGE_SCAN_RESULT',
-              payload: { url: window.location.href, platform: result.platform, jobs: [], scannedAt: lastScanTime }
+              payload: { url: window.location.href, platform: result.platform, jobs: [], scannedAt: lastScanTime, sourceMode: 'live-tab', strategy: result.strategy }
             });
             setPillState(isTracked ? 'tracking' : 'available');
             renderHudContent();
@@ -536,6 +593,7 @@ export default defineContentScript({
                 `;
               }
             }
+            await checkAutoClose();
             return;
           }
 
@@ -573,7 +631,7 @@ export default defineContentScript({
       
       const pages = await trackedPagesStorage.getValue() ?? [];
       
-      if (!pages.find(p => p.normalizedUrl === normalizeCareerUrl(sortedUrl))) {
+      if (!pages.find((p: import('../lib/storage').TrackedPage) => p.normalizedUrl === normalizeCareerUrl(sortedUrl))) {
         pages.push({
           id: crypto.randomUUID(),
           url: sortedUrl,
@@ -602,7 +660,7 @@ export default defineContentScript({
         // Will be updated by PAGE_SCAN_RESULT response via listener
         await safeSendMessage({
           type: 'PAGE_SCAN_RESULT',
-          payload: { url: currentUrl, platform: result.platform, jobs: result.jobs, scannedAt: Date.now() }
+          payload: { url: currentUrl, platform: result.platform, jobs: result.jobs, scannedAt: Date.now(), sourceMode: 'live-tab' }
         });
         
         showRichToast({
@@ -833,7 +891,7 @@ export default defineContentScript({
 
       const pages = await trackedPagesStorage.getValue() ?? [];
       const normalized = normalizeCareerUrl(window.location.href);
-      const existing = pages.find(p => p.normalizedUrl === normalized);
+      const existing = pages.find((p: import('../lib/storage').TrackedPage) => p.normalizedUrl === normalized);
       isTracked = !!existing;
 
       pillButton = document.createElement('div');
@@ -906,10 +964,10 @@ export default defineContentScript({
       }
 
       const allJobs = await unseenJobsStorage.getValue() || [];
-      cachedJobs = allJobs.filter(j => j.sourcePageUrl === window.location.href);
+      cachedJobs = allJobs.filter((j: import('../lib/storage').StoredJob) => j.sourcePageUrl === window.location.href);
       
       if (isTracked) {
-        const newCount = cachedJobs.filter(j => !j.seenAt).length;
+        const newCount = cachedJobs.filter((j: import('../lib/storage').StoredJob) => !j.seenAt).length;
         setPillState(newCount > 0 ? 'tracking-new' : 'tracking', newCount);
         renderHudContent();
         

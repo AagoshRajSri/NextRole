@@ -152,7 +152,7 @@ Tested across standard enterprise ATS platforms and job boards:
 * **Express.js (v4.19.2):** API server.
 * **Prisma (v6.19.3):** PostgreSQL Database Client.
 * **BullMQ (v5.8.3):** Redis-based job queues.
-* **Playwright-extra (v4.3.6) + Stealth (v2.11.2):** Undetectable browser crawlers.
+* **Playwright (v1.60.0):** Undetectable browser crawlers.
 * **AWS Bedrock SDK (v3.1049.0):** Anthropic Claude 3.5 Sonnet & Titan Embeddings.
 * **Stripe (v15.8.0):** Premium subscription gating.
 
@@ -204,7 +204,6 @@ AWS_SECRET_ACCESS_KEY="your-secret"
 AWS_REGION="us-east-1"
 STRIPE_SECRET_KEY="sk_test_yourkey"
 JWT_SECRET="secure_jwt_secret_for_sessions"
-COOKIE_ENCRYPTION_KEY="32-byte-hex-key-for-cookies"
 ```
 
 Apply schemas and generate the Prisma Client:
@@ -245,3 +244,52 @@ Starts the background queue runner:
 cd jobtracker-backend
 npm run worker
 ```
+
+---
+
+## 🌍 Production Deployment
+
+### 1. Provision Infrastructure
+* **PostgreSQL:** Provision a PostgreSQL database (e.g., Neon, Supabase, or AWS RDS). Ensure the `pgvector` extension is enabled.
+* **Redis:** Provision a Redis instance (e.g., Upstash or ElastiCache) for BullMQ queues.
+
+### 2. Deploy the Backend
+Deploy the `jobtracker-backend` directory to a platform like Render, Fly.io, or Railway:
+1. Configure Environment Variables in your hosting dashboard (`DATABASE_URL`, `DIRECT_URL`, `REDIS_URL`, `JWT_SECRET`).
+2. **Database Migration Step:** Production deploys **must** run `npx prisma migrate deploy` as part of the build/release step, not `npx prisma generate` alone — `generate` only updates the TypeScript client types, while `migrate deploy` executes pending migrations against the live production database.
+3. The server binds dynamically to `process.env.PORT` provided by the host.
+4. Deploy the application using the platform's CLI or GitHub integration.
+
+### 3. Build the Extension
+Before building the Chrome extension for the web store, update the root `.env` or inject the production URL during the build step:
+```bash
+VITE_API_URL=https://your-deployed-backend.com wxt build
+```
+This builds an optimized MV3 extension artifact (`.output/chrome-mv3`) and a ZIP ready for Chrome Web Store submission (`wxt zip`).
+
+---
+
+## ⏰ Alarm Behaviour — Pre-submission QA Checklist
+
+Chrome Manifest V3 enforces a **minimum alarm period of 1 minute** in packed (Web Store) builds.
+Any `periodInMinutes` or `delayInMinutes` value below `1` is **silently clamped up to 1** — it does
+**not** throw an error, and the behaviour difference between dev (unpacked) and production (packed) is
+invisible unless explicitly tested.
+
+### Registered alarms
+
+| Alarm name | `periodInMinutes` | Purpose |
+|---|---|---|
+| `POLL_JOBS` | **15** | Poll backend for new matching jobs |
+| `DAILY_PRUNE` | **1440** | Prune stale job & seen-ID storage |
+| `LINKEDIN_PAGES_SCAN` | **5** | Trigger LinkedIn tab scans (free-tier) |
+
+All values are ≥ 1 minute — no clamping occurs.
+
+### How to verify in a packed build before Web Store submission
+
+1. Run `wxt zip` to produce a production-packed ZIP.
+2. Open `chrome://extensions`, enable **Developer mode**, and click **Load unpacked** — but load the *contents of the packed ZIP* (extracted), not the dev `.output/` folder, so Chrome treats it as a packed extension context.
+3. Open `chrome://extensions` → click **Service Worker** to open the background DevTools console.
+4. Run: `chrome.alarms.getAll(alarms => console.table(alarms))` and confirm each alarm's `periodInMinutes` matches the table above.
+5. If badge update frequency needs to be faster than 1 minute during an active tab scan, the correct tool is `chrome.runtime.onMessage` (event-driven from the content script) — **not** an alarm. The current implementation already uses this correctly: badge updates fire immediately when `handleScanResult` is called, which is triggered by the content script messaging the background worker directly.

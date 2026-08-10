@@ -1,5 +1,6 @@
 import { Page } from 'playwright';
 import { BrowserFactory, BrowserOptions } from './lib/browserFactory.js';
+import { isPathAllowed } from './lib/robotsChecker.js';
 
 export interface ScrapedJob {
   atsJobId: string;
@@ -11,7 +12,7 @@ export interface ScrapedJob {
 
 export interface ScraperResult {
   jobs: ScrapedJob[];
-  status: 'ok' | 'blocked' | 'empty' | 'error' | 'partial';
+  status: 'ok' | 'blocked' | 'empty' | 'error' | 'partial' | 'robots-disallowed';
   jobsCount: number;
   scrapeDurationMs: number;
   platform: string;
@@ -50,6 +51,21 @@ function detectPlatform(url: string): string {
 
 export async function scrapeJobsWithResult(url: string, options?: BrowserOptions): Promise<ScraperResult> {
   const platform = detectPlatform(url);
+
+  // Check robots.txt before navigating with Playwright
+  const { allowed, reason } = await isPathAllowed(url);
+  if (!allowed) {
+    const pathname = new URL(url).pathname;
+    return {
+      jobs: [],
+      status: 'blocked',
+      jobsCount: 0,
+      scrapeDurationMs: 0,
+      platform,
+      blockedReason: 'robots-disallowed',
+      errorMessage: `robots.txt disallows scraping path: ${pathname}`,
+    };
+  }
   
   switch (platform) {
     case 'greenhouse': return scrapeGreenhouse(url, options);
@@ -139,8 +155,8 @@ async function scrapeApple(url: string): Promise<ScraperResult> {
 // ════════════════════════════════════════════════════════
 async function scrapeGoogleCareers(url: string, options?: BrowserOptions): Promise<ScraperResult> {
   const start = Date.now();
-  // Google is aggressive about headless detection. Stealth is required.
-  const { page, cleanup } = await BrowserFactory.getPage({ ...options, stealth: true, disableResourceBlocking: true });
+  // Google is aggressive about headless detection.
+  const { page, cleanup } = await BrowserFactory.getPage({ ...options, disableResourceBlocking: true });
   
   try {
     await page.goto(url, { waitUntil: 'networkidle' });
@@ -468,7 +484,7 @@ async function scrapeLinkedIn(url: string, options?: BrowserOptions): Promise<Sc
     }
   }
 
-  const { page, cleanup } = await BrowserFactory.getPage({ stealth: true, disableResourceBlocking: true, ...options })
+  const { page, cleanup } = await BrowserFactory.getPage({ disableResourceBlocking: true, ...options })
   
   try {
     // Step 1: Navigate, then wait for any JS redirects to settle
@@ -726,6 +742,12 @@ async function scrapeAshby(url: string, options?: BrowserOptions): Promise<Scrap
     const companySlug = url.match(/jobs\.ashbyhq\.com\/([^/]+)/)?.[1]
     if (companySlug) {
       try {
+        // NOTE ON PAGE CONTEXT GRAPHQL CALL:
+        // 1. Executed inside page.evaluate() to run within the browser page context, bypassing CORS restrictions
+        //    that prevent cross-origin fetch directly from a Node.js process.
+        // 2. This calls Ashby's public non-user GraphQL endpoint (`ApiJobBoardWithTeams`) with zero authentication,
+        //    cookies, or session state — returning identical data to a normal visitor loading the page.
+        //    This is a technical workaround for CORS security policy in Node, NOT a bypass of access control or anti-bot measures.
         const apiResponse = await page.evaluate(async (slug: string) => {
           const res = await fetch('https://jobs.ashbyhq.com/api/non-user-graphql', {
             method: 'POST',
@@ -758,6 +780,9 @@ async function scrapeAshby(url: string, options?: BrowserOptions): Promise<Scrap
       } catch {} 
     }
     
+    // FALLBACK PATH:
+    // If Ashby modifies or deprecates the public non-user-graphql endpoint above,
+    // execution falls back to DOM parsing of rendered PostingCard elements on the page.
     const jobs = await page.evaluate(() => {
       const cards = document.querySelectorAll('[class*="PostingCard"], .ashby-job-posting-list-item')
       return Array.from(cards).map(card => {

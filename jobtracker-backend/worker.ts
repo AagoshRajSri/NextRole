@@ -1,9 +1,8 @@
 import { Worker, Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { PrismaClient } from '@prisma/client';
+import { BrowserFactory } from './lib/browserFactory.js';
 import { scrapeJobsWithResult, ScraperResult } from './scraper.js';
-import { chromium } from 'playwright-extra';
-import stealth from 'puppeteer-extra-plugin-stealth';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -11,11 +10,12 @@ import { fileURLToPath } from 'url';
 import {
   extractCompanyFromUrl,
   jobMatchesPrefs,
-  decryptData,
   type UserPrefs,
 } from './utils.js';
+import { fetchPublicJobs } from './publicFeeds.js';
+import { tailorResume } from './lib/tailorResume.js';
+import { embedText, jobToEmbedText, profileToEmbedText } from './lib/embeddings.js';
 
-chromium.use(stealth());
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,7 +50,7 @@ console.log('[Worker] Connected to Redis. Initializing worker...');
 // MAIN SCRAPE WORKER
 // ────────────────────────────────────────────────────────
 
-async function scrapeWithRetry(url: string, cookies: Array<Record<string, any>> = [], maxRetries = 2): Promise<ScraperResult> {
+async function scrapeWithRetry(url: string, maxRetries = 2): Promise<ScraperResult> {
   let lastResult: ScraperResult | null = null;
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -60,7 +60,7 @@ async function scrapeWithRetry(url: string, cookies: Array<Record<string, any>> 
       await new Promise(r => setTimeout(r, delay));
     }
     
-    const result = await scrapeJobsWithResult(url, { cookies });
+    const result = await scrapeJobsWithResult(url);
     lastResult = result;
     
     if (result.status === 'ok' || result.status === 'empty') break;
@@ -82,11 +82,98 @@ async function scrapeWithRetry(url: string, cookies: Array<Record<string, any>> 
   return lastResult!;
 }
 
-const worker = new Worker('monitorQueue', async (job) => {  // Default: scrape job
+
+const worker = new Worker('monitorQueue', async (job) => {
   const { searchId, url } = job.data;
-  console.log(`\n[Worker] Processing scrape: ${searchId} → ${url}`);
+  console.log(`\n[Worker] Processing ${job.name || 'scrape'}: ${searchId}`);
 
   try {
+    // ────────────────────────────────────────────────────────
+    // BACKFILL JOB: Retries failed/pending embeddings
+    // ────────────────────────────────────────────────────────
+    if (job.name === 'embedding-backfill') {
+      try {
+        console.log('[Worker] Starting embedding backfill...');
+        // 1. Process JobSnapshots
+        const pendingJobs = await prisma.jobSnapshot.findMany({
+          where: {
+            embeddingStatus: { in: ['pending', 'failed'] },
+            embeddingRetries: { lt: 5 }
+          },
+          take: 50
+        });
+
+        for (const snap of pendingJobs) {
+          try {
+            const vec = await embedText(jobToEmbedText({ title: snap.title, companyName: snap.companyName || '', location: snap.location }));
+            // SQL injection prevention: vec (JSON array) and snap.id are bound as
+            // tagged-template parameters — never concatenated into the SQL string.
+            await prisma.$executeRaw`
+              UPDATE "JobSnapshot"
+              SET    "jobEmbedding" = ${JSON.stringify(vec)}::vector,
+                     "embeddingStatus" = 'ok'
+              WHERE  id = ${snap.id}
+            `;
+            console.log(`[Worker] Backfilled embedding for job ${snap.id}`);
+          } catch (err: any) {
+            console.error(`[Worker] Backfill failed for job ${snap.id}:`, err.message);
+            await prisma.jobSnapshot.update({
+              where: { id: snap.id },
+              data: {
+                embeddingStatus: 'failed',
+                embeddingRetries: { increment: 1 }
+              }
+            });
+          }
+        }
+
+        // 2. Process UserProfiles
+        const pendingProfiles = await prisma.userProfile.findMany({
+          where: {
+            embeddingStatus: { in: ['pending', 'failed'] },
+            embeddingRetries: { lt: 5 }
+          },
+          take: 50
+        });
+
+        for (const prof of pendingProfiles) {
+          try {
+            const vec = await embedText(profileToEmbedText({
+              targetRoles: prof.targetRoles,
+              locations: prof.locations,
+              experienceLevel: prof.experienceLevel,
+              skills: prof.skills,
+              experience: prof.experience
+            }));
+            // SQL injection prevention: vec (JSON array) and prof.userId are bound
+            // as tagged-template parameters — never concatenated into the SQL string.
+            await prisma.$executeRaw`
+              UPDATE "UserProfile"
+              SET    "profileEmbedding" = ${JSON.stringify(vec)}::vector,
+                     "embeddingStatus" = 'ok'
+              WHERE  "userId" = ${prof.userId}
+            `;
+            console.log(`[Worker] Backfilled embedding for profile ${prof.userId}`);
+          } catch (err: any) {
+            console.error(`[Worker] Backfill failed for profile ${prof.userId}:`, err.message);
+            await prisma.userProfile.update({
+              where: { userId: prof.userId },
+              data: {
+                embeddingStatus: 'failed',
+                embeddingRetries: { increment: 1 }
+              }
+            });
+          }
+        }
+      } catch (err: any) {
+        console.error('[Worker] Backfill job failed:', err.message);
+      }
+      return;
+    }
+
+    // ────────────────────────────────────────────────────────
+    // STANDARD SCRAPING JOB
+    // ────────────────────────────────────────────────────────
     const search = await prisma.trackedSearch.findUnique({ where: { id: searchId } });
     if (!search) {
       console.error(`[Worker] TrackedSearch ${searchId} not found.`);
@@ -102,38 +189,66 @@ const worker = new Worker('monitorQueue', async (job) => {  // Default: scrape j
       experienceLevel: userProfile?.experienceLevel ?? undefined,
     };
 
-    // Decrypt stored session cookies for auth-wall bypass (LinkedIn etc.)
-    let sessionCookies: Array<Record<string, any>> = [];
-    if (userProfile?.sessionCookies) {
+    let resultStatus = 'ok';
+    let resultError: string | null = null;
+    let scrapedJobs: Array<{ atsJobId: string, title: string, location: string, url: string, companyName?: string }> = [];
+
+    if (job.name === 'public-feed-sync' && search.atsType && search.boardSlug) {
       try {
-        const decrypted = decryptData(userProfile.sessionCookies as string);
-        if (decrypted) sessionCookies = JSON.parse(decrypted);
-        console.log(`[Worker] Loaded ${sessionCookies.length} session cookies for auth bypass.`);
-      } catch (e) {
-        console.warn('[Worker] Failed to decrypt session cookies (non-fatal):', e);
+        const publicJobs = await fetchPublicJobs(search.atsType, search.boardSlug);
+        scrapedJobs = publicJobs.map(j => ({
+          atsJobId: j.id,
+          title: j.title,
+          location: j.location,
+          url: j.url,
+          companyName: j.companyName,
+        }));
+      } catch (err: any) {
+        resultStatus = 'error';
+        resultError = err.message;
+      }
+    } else {
+      // Restricted platforms (LinkedIn, Google Careers, Amazon Jobs) are NEVER scraped
+      // unattended via background cron. They are restricted to user-initiated extension scans.
+      const urlPlatform = search.platform || (await import('./utils.js')).detectPlatform(url);
+      if (['linkedin', 'google', 'amazon_jobs'].includes(urlPlatform)) {
+        console.log(`[Worker] Skipping background cron sweep for restricted platform "${urlPlatform}" (${url}). Use extension live-tab scan.`);
+        await prisma.trackedSearch.update({
+          where: { id: searchId },
+          data: {
+            lastScrapedAt: new Date(),
+            lastScrapeStatus: 'skipped',
+            lastScrapeError: `Background scraping disabled for ${urlPlatform} — use extension live-tab scan`,
+          }
+        });
+        return;
+      }
+
+      // Scrape the page with retries
+      const result = await scrapeWithRetry(url);
+      resultStatus = result.blockedReason === 'robots-disallowed' ? 'robots-disallowed' : result.status;
+      resultError = result.errorMessage || result.blockedReason || null;
+      if (result.status === 'ok' || result.status === 'partial') {
+        scrapedJobs = result.jobs;
       }
     }
-
-    // Scrape the page with retries + cookie injection
-    const result = await scrapeWithRetry(url, sessionCookies);
 
     // Update DB with scrape result regardless of outcome
     await prisma.trackedSearch.update({
       where: { id: searchId },
       data: {
         lastScrapedAt: new Date(),
-        lastScrapeStatus: result.status,
-        lastScrapeError: result.errorMessage || result.blockedReason || null,
+        lastScrapeStatus: resultStatus,
+        lastScrapeError: resultError,
       }
     });
 
     // Only process jobs if we got something useful
-    if (result.status !== 'ok' && result.status !== 'partial') {
-      console.log(`[Worker] Skipping job processing for ${url}: ${result.status}`);
+    if (resultStatus !== 'ok' && resultStatus !== 'partial') {
+      console.log(`[Worker] Skipping job processing for ${searchId}: ${resultStatus}`);
       return;
     }
 
-    const scrapedJobs = result.jobs;
 
     // Determine new jobs
     const existingSnapshots = await prisma.jobSnapshot.findMany({
@@ -171,6 +286,23 @@ const worker = new Worker('monitorQueue', async (job) => {  // Default: scrape j
           },
         });
 
+        // Populate jobEmbedding asynchronously (fire-and-forget so ingest is never blocked)
+        embedText(jobToEmbedText({ title: job.title, companyName, location: job.location }))
+          .then(async vec => {
+            // SQL injection prevention: vec (JSON array) and savedJob.id are bound
+            // as tagged-template parameters — never concatenated into the SQL string.
+            await prisma.$executeRaw`
+              UPDATE "JobSnapshot"
+              SET    "jobEmbedding" = ${JSON.stringify(vec)}::vector,
+                     "embeddingStatus" = 'ok'
+              WHERE  id = ${savedJob.id}
+            `
+          })
+          .catch(async err => {
+            console.error(`[Worker] jobEmbedding write failed for JobSnapshot ${savedJob.id}:`, err.message);
+            await prisma.jobSnapshot.update({ where: { id: savedJob.id }, data: { embeddingStatus: 'failed' } }).catch(() => {});
+          });
+
         if (match.matched) {
           matchedCount++;
           console.log(`[Worker] ✅ MATCHED: "${job.title}" — ${match.reason}`);
@@ -191,12 +323,6 @@ const worker = new Worker('monitorQueue', async (job) => {  // Default: scrape j
           // Send email if user has emailAlerts enabled AND alertMode is instant
           if (userProfile?.emailAlerts && userProfile?.alertMode === 'instant') {
             await sendJobEmailAlert(search.userId, companyName, job, match.reason, userProfile.email);
-          }
-
-          // Premium auto-tailoring (only for premium users)
-          if (userProfile?.isPremium) {
-            const fullDesc = await scrapeFullJobDescription(job.url);
-            await handlePremiumAiTailoring(search.userId, companyName, savedJob, fullDesc);
           }
         } else {
           console.log(`[Worker] ⏭️  No match: "${job.title}"`);
@@ -229,23 +355,30 @@ const worker = new Worker('monitorQueue', async (job) => {  // Default: scrape j
   }
 }, { connection });
 
+
+
 // ────────────────────────────────────────────────────────
-// SCHEDULED CRON SCRAPER (every 15 minutes)
+// PUBLIC FEED CRON (every 15 minutes)
 // ────────────────────────────────────────────────────────
 setInterval(async () => {
-  console.log('[Scheduler] Queuing scrape jobs for all tracked searches...');
+  console.log('[Scheduler] Queuing public feed syncs...');
   try {
-    const searches = await prisma.trackedSearch.findMany();
-    console.log(`[Scheduler] Found ${searches.length} tracked searches.`);
+    const searches = await prisma.trackedSearch.findMany({
+      where: {
+        atsType: { not: null },
+        boardSlug: { not: null }
+      }
+    });
+    console.log(`[Scheduler] Found ${searches.length} public feeds to sync.`);
     for (const search of searches) {
-      await monitorQueue.add('cron-scrape', { searchId: search.id, url: search.url });
+      if (search.atsType && search.boardSlug) {
+        await monitorQueue.add('public-feed-sync', { searchId: search.id, url: search.url });
+      }
     }
   } catch (err) {
-    console.error('[Scheduler] Error:', err);
+    console.error('[Scheduler] Error querying public feeds:', err);
   }
 }, 15 * 60 * 1000);
-
-console.log('[Scheduler] Active — 15 min interval.');
 
 // ────────────────────────────────────────────────────────
 // EMAIL ALERTS
@@ -263,13 +396,12 @@ async function sendJobEmailAlert(
 
 // ────────────────────────────────────────────────────────
 // FULL JOB DESCRIPTION SCRAPER
+// Fetches the rendered HTML of an individual job posting page and extracts
+// the description text.  Uses BrowserFactory so configuration is centralised.
 // ────────────────────────────────────────────────────────
 async function scrapeFullJobDescription(url: string): Promise<string> {
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const { page, cleanup } = await BrowserFactory.getPage({ disableResourceBlocking: true });
   try {
-    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-    const page = await context.newPage();
-    await page.waitForTimeout(Math.floor(Math.random() * 800) + 200);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     const selectors = [
@@ -288,12 +420,14 @@ async function scrapeFullJobDescription(url: string): Promise<string> {
     }
     return desc.trim() || 'No description scraped.';
   } finally {
-    await browser.close();
+    await cleanup();
   }
 }
 
 // ────────────────────────────────────────────────────────
 // PREMIUM AI RESUME TAILORING PIPELINE
+// Delegates to the shared lib/tailorResume.ts so the REST endpoint
+// and this BullMQ path always use identical Claude/mock logic.
 // ────────────────────────────────────────────────────────
 async function handlePremiumAiTailoring(
   userId: string,
@@ -301,111 +435,19 @@ async function handlePremiumAiTailoring(
   jobSnapshot: any,
   jobDescription: string,
 ): Promise<void> {
-  console.log(`[AI Tailoring] Starting resume tailoring for user: ${userId}, Job: ${jobSnapshot.title} at ${companyName}`);
-  
+  console.log(`[AI Tailoring] Starting for user: ${userId}, job: ${jobSnapshot.title} @ ${companyName}`);
   try {
-    const userProfile = await prisma.userProfile.findUnique({ where: { userId } });
-    if (!userProfile) {
-      console.warn(`[AI Tailoring] User profile not found for user: ${userId}`);
-      return;
-    }
-
-    const hasResumeData = userProfile.experience || userProfile.skills || userProfile.education || userProfile.projects;
-    if (!hasResumeData) {
-      console.log(`[AI Tailoring] User has no resume details in profile. Skipping tailoring.`);
-      return;
-    }
-
-    const promptText = `
-You are an expert resume writer and career coach.
-Your task is to tailor the user's resume sections (Experience, Skills, Education, Projects) to align with the following job description.
-
-Job Title: ${jobSnapshot.title}
-Company: ${companyName}
-Location: ${jobSnapshot.location || 'Not Specified'}
-Job Description:
-${jobDescription}
-
-User's Current Resume Details:
-Experience:
-${userProfile.experience || 'None'}
-
-Skills:
-${userProfile.skills || 'None'}
-
-Education:
-${userProfile.education || 'None'}
-
-Projects:
-${userProfile.projects || 'None'}
-
-Please tailor these sections to highlight relevant skills and achievements that match the requirements of the job.
-Keep the output professional, formatted in clean markdown, containing sections for Tailored Experience, Tailored Skills, Tailored Projects, and Education.
-Do not invent facts, only rephrase and emphasize existing experiences.
-`;
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    let resumeText = '';
-
-    if (!apiKey || apiKey === 'sk-ant-123456') {
-      console.log('[AI Tailoring] Dev/Mock mode enabled. Generating mock tailored resume.');
-      resumeText = `
-# Tailored Resume for ${userProfile.name || 'User'}
-Target: ${jobSnapshot.title} at ${companyName}
-
-## Professional Summary
-Accomplished professional tailored for the ${jobSnapshot.title} position at ${companyName}.
-
-## Tailored Experience
-${userProfile.experience || 'No experience details specified.'}
-
-## Tailored Skills
-${userProfile.skills || 'No skills details specified.'}
-
-## Tailored Projects
-${userProfile.projects || 'No project details specified.'}
-
-## Education
-${userProfile.education || 'No education details specified.'}
-      `.trim();
-    } else {
-      console.log('[AI Tailoring] Sending request to Anthropic Claude...');
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-3-5-sonnet-20240620',
-          max_tokens: 3000,
-          messages: [{ role: 'user', content: promptText }],
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Anthropic API returned status ${response.status}: ${await response.text()}`);
-      }
-
-      const data = await response.json() as any;
-      resumeText = data.content?.[0]?.text || '';
-    }
-
-    if (resumeText) {
-      await prisma.tailoredResume.create({
-        data: {
-          jobSnapshotId: jobSnapshot.id,
-          resumeText,
-          pdfUrl: null,
-        },
-      });
-      console.log(`[AI Tailoring] ✅ Successfully saved tailored resume for job snapshot: ${jobSnapshot.id}`);
-    } else {
-      console.warn('[AI Tailoring] Tailored resume generation resulted in empty text.');
-    }
+    await tailorResume(prisma, {
+      userId,
+      jobTitle: jobSnapshot.title,
+      companyName,
+      jobLocation: jobSnapshot.location,
+      jobDescription,
+      jobSnapshotId: jobSnapshot.id,
+    });
+    console.log(`[AI Tailoring] ✅ Done for snapshot ${jobSnapshot.id}`);
   } catch (err: any) {
-    console.error(`[AI Tailoring] Error in resume tailoring pipeline:`, err);
+    console.error('[AI Tailoring] Error:', err.message);
   }
 }
 

@@ -13,7 +13,8 @@ import {
   isCareerPage,
   extractReadableLabel,
   userIdStorage,
-  dismissedJobIdsStorage
+  dismissedJobIdsStorage,
+  autoCloseScanTabStorage
 } from '../../lib/storage';
 import { logger } from '../../lib/logger';
 import { normalizeCareerUrl } from '../../lib/utils';
@@ -67,10 +68,10 @@ async function init() {
   $('global-loading')?.remove();
 
   // Watch for changes
-  profileStorage.watch(val => { if(val) { profile = val; renderMonitorState(); }});
-  trackedPagesStorage.watch(val => { if(val) { trackedPages = val; renderMonitorState(); loadWatchedPages(); }});
-  unseenJobsStorage.watch(val => { if(val) { unseenJobs = val; updateFeedBadge(); loadFeed(); }});
-  monitorStateStorage.watch(val => { if(val) { monitorState = val; renderMonitorState(); }});
+  profileStorage.watch((val: UserProfile | null) => { if(val) { profile = val; renderMonitorState(); }});
+  trackedPagesStorage.watch((val: TrackedPage[] | null) => { if(val) { trackedPages = val; renderMonitorState(); loadWatchedPages(); }});
+  unseenJobsStorage.watch((val: StoredJob[] | null) => { if(val) { unseenJobs = val; updateFeedBadge(); loadFeed(); }});
+  monitorStateStorage.watch((val: MonitorState | null) => { if(val) { monitorState = val; renderMonitorState(); }});
 
   // Setup UI
   setupTabs();
@@ -362,11 +363,12 @@ async function loadWatchedPages() {
                 ${dotHtml}
                 <span style="font-weight:700">${statusText}</span>
               </div>
-              ${!isOpen ? `<button class="btn-open-scan" data-url="${escapeHtml(s.url)}" style="background:var(--cyan); color:#fff; border:1px solid #000; padding:2px 6px; font-size:9px; cursor:pointer; font-weight:700;">OPEN & SCAN</button>` : ''}
+              ${!isOpen ? `<button class="btn-open-scan" data-url="${escapeHtml(s.url)}" style="background:var(--cyan); color:#fff; border:1px solid #000; padding:2px 6px; font-size:9px; cursor:pointer; font-weight:700;">CHECK NOW</button>` : ''}
             </div>
             ${s.lastScrapedAt ? `<div style="font-size:9px; color:#888; margin-top:2px;">Last scanned: ${lastTime}</div>` : ''}
           </div>
           ${s.newJobCount > 0 ? `<span class="new-badge">${s.newJobCount} new</span>` : ''}
+          ${s.lastScrapeStatus === 'heuristic' ? `<span title="Selector map missed — DOM heuristic was used. Match quality may be lower." style="font-size:9px; background:#fff3cd; color:#856404; border:1px solid #ffc107; border-radius:3px; padding:1px 5px; cursor:help; white-space:nowrap;">⚠ Heuristic</span>` : ''}
           <button class="btn-trash" data-id="${s.id}" title="Remove">🗑</button>
         </div>
       </div>
@@ -402,8 +404,18 @@ async function loadWatchedPages() {
 
   container.querySelectorAll('.btn-open-scan').forEach(btn => {
     btn.addEventListener('click', () => {
-      const url = (btn as HTMLElement).dataset.url!;
-      browser.tabs.create({ url, active: false });
+      const originalUrl = (btn as HTMLElement).dataset.url!;
+
+      // Do NOT append any query params to the ATS URL — unrecognized params
+      // confuse some ATS systems and pollute analytics.  Instead we write a
+      // pendingAutoScan flag to session storage keyed by the new tab ID once
+      // chrome.tabs.create returns it, and content.ts reads + clears the flag.
+      browser.tabs.create({ url: originalUrl, active: true }, (newTab) => {
+        if (newTab?.id) {
+          browser.storage.session.set({ [`pendingAutoScan:${newTab.id}`]: true });
+        }
+      });
+      logger.info('manual', `Manual AI scan triggered for: ${originalUrl}`);
       btn.textContent = 'OPENING...';
       (btn as HTMLButtonElement).disabled = true;
       setTimeout(() => { loadWatchedPages(); }, 2000);
@@ -678,7 +690,7 @@ async function loadFeed() {
       const isATS = (btn as HTMLElement).dataset.isats === 'true';
       if (isATS) {
         const jobs = await unseenJobsStorage.getValue() || [];
-        const updated = jobs.map(j => j.id === id ? { ...j, applicationStatus: 'applied', appliedAt: Date.now() } : j);
+        const updated = jobs.map((j: StoredJob) => j.id === id ? { ...j, applicationStatus: 'applied', appliedAt: Date.now() } : j);
         await unseenJobsStorage.setValue(updated as any);
       } else {
         await markJobApplied(id);
@@ -724,6 +736,17 @@ async function loadSettings() {
       const next = !emailToggle.classList.contains('on');
       emailToggle.classList.toggle('on', next);
       browser.runtime.sendMessage({ type: 'PREFS_UPDATED', changes: { emailAlerts: next } });
+    };
+  }
+
+  const autoClose = await autoCloseScanTabStorage.getValue();
+  const autoCloseToggle = $('settings-autoclose-toggle');
+  if (autoCloseToggle) {
+    autoCloseToggle.classList.toggle('on', autoClose);
+    autoCloseToggle.onclick = async () => {
+      const next = !autoCloseToggle.classList.contains('on');
+      autoCloseToggle.classList.toggle('on', next);
+      await autoCloseScanTabStorage.setValue(next);
     };
   }
 

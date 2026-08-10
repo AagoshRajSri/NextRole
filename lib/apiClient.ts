@@ -1,5 +1,7 @@
 import { CONFIG } from './config';
 
+import { browser } from 'wxt/browser';
+
 export class ApiClient {
   private userId: string;
   private baseUrl: string;
@@ -17,17 +19,31 @@ export class ApiClient {
   ): Promise<{ data: T | null, error: string | null, offline: boolean }> {
     const { timeout = 10000, retries = 1 } = options;
     
+    // Fetch JWT from local storage
+    let token = '';
+    try {
+      const storage = await browser.storage.local.get('nr_jwt_token');
+      token = typeof storage.nr_jwt_token === 'string' ? storage.nr_jwt_token : '';
+    } catch (e) {
+      // Ignore
+    }
+
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
         
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-User-Id': this.userId,
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
         const response = await fetch(`${this.baseUrl}${path}`, {
           method,
-          headers: {
-            'Content-Type': 'application/json',
-            'X-User-Id': this.userId,
-          },
+          headers,
           body: body ? JSON.stringify(body) : undefined,
           signal: controller.signal,
         });

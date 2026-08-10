@@ -36,7 +36,6 @@ export async function fireNotifications(newJobs: StoredJob[], profile: { isOnboa
       buttons: [{ title: '📋 Open job' }, { title: '😴 Snooze 1h' }],
     });
     await storePendingNotification(notifId, job.url);
-    browser.alarms.create(`notif-keepalive-${notifId}`, { delayInMinutes: 0.5 });
   } else {
     const title = firstName
       ? `Hey ${firstName}, we found ${worthy.length} new matches! 🚀`

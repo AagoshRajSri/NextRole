@@ -20,6 +20,8 @@ model TrackedSearch {
   lastScrapeStatus String?       // "ok" | "error" | "empty"
   lastScrapeError  String?
   newJobCount      Int           @default(0)
+  boardSlug        String?       // E.g., 'stripe' for greenhouse, or 'tenant/site' for workday
+  atsType          String?       // "greenhouse" | "lever" | "ashby" | "workday"
   snapshots        JobSnapshot[]
 
   @@index([userId])
@@ -40,6 +42,8 @@ model JobSnapshot {
   isNew           Boolean          @default(true)
   seenAt          DateTime?
   jobEmbedding    Unsupported("vector(1024)")?
+  embeddingStatus String?          @default("pending") // 'pending' | 'ok' | 'failed'
+  embeddingRetries Int             @default(0)
   semanticScore   Float?
   tailoredResumes TailoredResume[]
 
@@ -61,14 +65,15 @@ model UserProfile {
   emailAlerts      Boolean  @default(false)
   isOnboarded      Boolean  @default(false)
   monitorActive    Boolean  @default(false)
-  sessionCookies   String?  @db.Text
-  cookiesSyncedAt  DateTime?
   // Legacy resume fields — kept for premium AI tailoring later
   experience       String   @default("") @db.Text
   skills           String   @default("") @db.Text
   education        String   @default("") @db.Text
   projects         String   @default("") @db.Text
   profileEmbedding Unsupported("vector(1024)")?
+  embeddingStatus  String?  @default("pending") // 'pending' | 'ok' | 'failed'
+  embeddingRetries Int      @default(0)
+  passwordHash     String?
   isPremium        Boolean  @default(false)
   monthlyRunsUsed  Int      @default(0)
   updatedAt        DateTime @updatedAt

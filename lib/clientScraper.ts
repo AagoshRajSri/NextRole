@@ -3,6 +3,8 @@
 // Extracts jobs directly from the page DOM in the content script.
 // ────────────────────────────────────────────────────────
 import { detectPlatform, extractCompanyFromUrl } from './utils';
+import { ApiClient } from './apiClient';
+import { userIdStorage } from './storage';
 
 export interface ScrapedJob {
   atsJobId: string;
@@ -49,9 +51,23 @@ export function scrapeCurrentPage(doc: Document, url: string, remoteSelectors: R
 
   // If platform-specific scraper found nothing, fall back to generic
   if (result.jobs.length === 0 && platform !== 'generic') {
-    const fallback = scrapeGenericCompanyCareerDOM(doc, url);
-    if (fallback.jobs.length > 0) {
-      result = { jobs: fallback.jobs, strategy: `fallback:${fallback.strategy}` };
+    const isATS = ['workday', 'eightfold', 'icims', 'greenhouse', 'lever', 'ashby'].includes(platform);
+    if (isATS && isJobsIndexPage(url, doc)) {
+      const fallbackJobs = scrapeBySiblingHeuristic(doc, url);
+      if (fallbackJobs.length > 0) {
+        result = { jobs: fallbackJobs, strategy: `heuristic-fallback` };
+        reportSelectorFailure(platform, url, doc).catch(() => {});
+      } else {
+        const fallback = scrapeGenericCompanyCareerDOM(doc, url);
+        if (fallback.jobs.length > 0) {
+          result = { jobs: fallback.jobs, strategy: `fallback:${fallback.strategy}` };
+        }
+      }
+    } else {
+      const fallback = scrapeGenericCompanyCareerDOM(doc, url);
+      if (fallback.jobs.length > 0) {
+        result = { jobs: fallback.jobs, strategy: `fallback:${fallback.strategy}` };
+      }
     }
   }
 
@@ -957,4 +973,120 @@ function scrapeAmazonJobsDOM(doc: Document, url: string) { return scrapeGenericC
     }
     
     return scrapeEightfoldDOM(doc, url)
+  }
+
+  // ════════════════════════════════════════════════════════
+  // ATS VALIDATION + HEURISTIC FALLBACK
+  // ════════════════════════════════════════════════════════
+
+  /**
+   * Returns true when the page looks like a jobs-index listing page
+   * (URL or title contains jobs/careers/search keywords).
+   */
+  function isJobsIndexPage(url: string, doc: Document): boolean {
+    const lurl = url.toLowerCase();
+    if (
+      lurl.includes('/jobs') ||
+      lurl.includes('/careers') ||
+      lurl.includes('/search') ||
+      lurl.includes('position')
+    ) return true;
+    const title = doc.title.toLowerCase();
+    if (
+      title.includes('jobs') ||
+      title.includes('careers') ||
+      title.includes('openings')
+    ) return true;
+    return false;
+  }
+
+  /**
+   * Generic heuristic scraper: finds the first parent element that has 3+
+   * same-tag children where each child contains a heading-like node and a
+   * shorter text node — classic repeated job-card pattern.
+   */
+  function scrapeBySiblingHeuristic(doc: Document, url: string): ScrapedJob[] {
+    const company = extractCompanyFromUrl(url);
+
+    // Find container elements whose children look like repeated cards
+    const candidates = Array.from(doc.querySelectorAll('body *')).filter(el => {
+      if (el.children.length < 3) return false;
+      const firstChildTag = el.children[0].tagName;
+      let count = 0;
+      for (let i = 0; i < el.children.length; i++) {
+        if (el.children[i].tagName === firstChildTag) count++;
+      }
+      return count >= 3;
+    });
+
+    for (const container of candidates) {
+      const children = Array.from(container.children);
+      const potentialJobs: ScrapedJob[] = [];
+
+      for (const child of children) {
+        const headingEl = child.querySelector(
+          'h1, h2, h3, h4, h5, h6, strong, [class*="title"], [class*="Title"]'
+        );
+        const leafTextEls = Array.from(child.querySelectorAll('*')).filter(el =>
+          el.children.length === 0 &&
+          (el.textContent?.trim() || '').length > 0 &&
+          el.tagName !== 'SCRIPT' &&
+          el.tagName !== 'STYLE' &&
+          el !== headingEl
+        );
+
+        const linkEl = child.querySelector('a[href]');
+        if (!linkEl) continue;
+        const href = linkEl.getAttribute('href') || '';
+        const title = headingEl?.textContent?.trim() || linkEl.textContent?.trim();
+        if (!title || title.length < 4) continue;
+
+        // Pick the first short leaf text that isn't the title as location
+        let location = '';
+        for (const textNode of leafTextEls) {
+          const text = textNode.textContent?.trim() || '';
+          if (text.length > 0 && text.length < 50 && text !== title) {
+            location = text;
+            break;
+          }
+        }
+
+        const fullUrl = href.startsWith('http') ? href : new URL(href, url).href;
+        const id = fullUrl.split('/').filter(Boolean).pop()?.split('?')[0] || '';
+        if (id && title) {
+          potentialJobs.push({ atsJobId: id, title, companyName: company, location, url: fullUrl });
+        }
+      }
+
+      // Only trust the result if we got at least 3 apparent job cards
+      if (potentialJobs.length >= 3) return deduplicateByTitle(potentialJobs);
+    }
+    return [];
+  }
+
+  /**
+   * Fire-and-forget: POST a sanitized DOM snippet + metadata to the backend
+   * so the selector team can update the remote map for this ATS/domain.
+   */
+  async function reportSelectorFailure(platform: string, url: string, doc: Document) {
+    try {
+      const userId = await userIdStorage.getValue();
+      if (!userId) return;
+
+      // Strip scripts/styles to keep the payload lean
+      const clonedBody = doc.body.cloneNode(true) as HTMLElement;
+      clonedBody.querySelectorAll('script, style, noscript, svg, img, iframe').forEach(el => el.remove());
+      const snippet = clonedBody.innerHTML.slice(0, 100_000); // max 100 kB
+
+      const apiClient = new ApiClient(userId);
+      await apiClient.post('/api/selectors/report', {
+        domain: new URL(url).hostname,
+        platform,
+        url,
+        timestamp: Date.now(),
+        snippet,
+      });
+    } catch {
+      // Silently swallow — reporting must never break the scan pipeline
+    }
   }
