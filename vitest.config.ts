@@ -7,6 +7,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
     exclude: ['node_modules', '.output', '.wxt', 'jobtracker-backend/node_modules'],
+    server: { deps: { inline: ['express', 'supertest'] } },
     setupFiles: ['./tests/setup.ts'],
     reporters: ['verbose'],
     coverage: {
@@ -23,6 +24,8 @@ export default defineConfig({
       '@prisma/client': path.resolve(__dirname, 'jobtracker-backend/node_modules/@prisma/client'),
       'ioredis': path.resolve(__dirname, 'jobtracker-backend/node_modules/ioredis'),
       'bullmq': path.resolve(__dirname, 'jobtracker-backend/node_modules/bullmq'),
+      'express': path.resolve(__dirname, 'jobtracker-backend/node_modules/express'),
+      'supertest': path.resolve(__dirname, 'jobtracker-backend/node_modules/supertest'),
     },
   },
 });

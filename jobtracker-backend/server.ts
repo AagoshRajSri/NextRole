@@ -930,6 +930,27 @@ app.post('/api/profile', validate(ProfileSchema), async (req, res) => {
   }
 });
 
+// DELETE — delete user account and cascade all associated data
+app.delete('/api/account', requireAuth, async (req, res) => {
+  const userId = (req as any).userId;
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  try {
+    await prisma.$transaction([
+      prisma.userSubscription.deleteMany({ where: { userId } }),
+      prisma.trackedSearch.deleteMany({ where: { userId } }),
+      prisma.userProfile.deleteMany({ where: { userId } }),
+    ]);
+
+    res.json({ success: true, message: 'Account and all associated data deleted successfully.' });
+  } catch (err: any) {
+    logger.error({ err, userId }, 'Error deleting account');
+    res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
 
 // ════════════════════════════════════════════════════════
 // RESUME TAILORING API

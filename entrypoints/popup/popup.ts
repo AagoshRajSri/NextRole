@@ -803,7 +803,7 @@ async function loadSettings() {
       logConsole.innerHTML = logs.map(l => {
         const time = new Date(l.timestamp).toLocaleTimeString([], { hour12: false });
         const color = l.level === 'error' ? '#ff6b81' : l.level === 'warn' ? '#f1c40f' : '#00E5FF';
-        return `<div style="margin-bottom: 4px;"><span style="color: #888;">[${time}]</span> <span style="color: ${color};">[${l.context}]</span> ${escapeHtml(l.message)}</div>`;
+        return `<div style="margin-bottom: 4px;"><span style="color: #888;">[${time}]</span> <span style="color: ${color};">[${escapeHtml(l.context)}]</span> ${escapeHtml(l.message)}</div>`;
       }).join('');
     }
     

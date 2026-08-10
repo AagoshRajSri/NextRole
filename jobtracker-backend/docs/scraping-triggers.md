@@ -17,16 +17,16 @@ This document outlines every code path in the NextRole backend that invokes Play
 | Module / Function | Call Site | Target Platform(s) | Trigger Type | Unattended Cron Allowed? | Policy & Audit Notes |
 |---|---|---|---|---|---|
 | `fetchPublicJobs()` | `worker.ts` | Greenhouse, Lever, Ashby, Workday (JSON feeds) | (a) Unattended Cron | **Yes** | Uses public, unauthenticated JSON API feeds. No HTML rendering or browser automation used. |
-| `scrapeLinkedIn()` | `scraper.ts:239` | LinkedIn (`linkedin`) | (b) Live-Tab Scan / (d) CLI | ❌ **NO (Blocked in Worker)** | Unattended cron scraping is explicitly prohibited. Background cron checks skip LinkedIn URLs with status `skipped`. Scanning is allowed only via live extension tab. |
-| `scrapeGoogleCareers()` | `scraper.ts:143` | Google Careers (`google`) | (b) Live-Tab Scan / (d) CLI | ❌ **NO (Blocked in Worker)** | Google `robots.txt` disallows automated crawler access. Background cron checks skip `google` URLs with status `skipped`. |
-| `scrapeAmazonJobs()` | `scraper.ts:197` | Amazon Jobs (`amazon_jobs`) | (b) Live-Tab Scan / (d) CLI | ❌ **NO (Blocked in Worker)** | Amazon Jobs `robots.txt` prohibits automated scraping. Background cron checks skip `amazon_jobs` URLs with status `skipped`. |
-| `scrapeTaleo()` | `scraper.ts:281` | Taleo (`taleo`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | HTML scraping fallback for unauthenticated public ATS job listings. |
-| `scrapeNaukri()` | `scraper.ts:471` | Naukri (`naukri`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Scrapes public search listings. |
-| `scrapeApple()` | `scraper.ts:100` | Apple Jobs (`apple`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Scrapes public search listings. |
-| `scrapeWorkday()` | `scraper.ts:634` | Workday (`workday`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Fallback HTML scraper when public feed is unavailable. |
-| `scrapeSmartRecruiters()` | `scraper.ts:719` | SmartRecruiters (`smartrecruiters`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Fallback HTML scraper when public feed is unavailable. |
-| `scrapeIcims()` | `scraper.ts:794` | iCIMS (`icims`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Fallback HTML scraper. |
-| `scrapeGeneric()` | `scraper.ts:328` | Generic career pages | (a) Unattended Cron / (b) Live-Tab | **Yes** | Standard HTML link & JSON-LD parser fallback. |
+| `scrapeLinkedIn()` | `scraper.ts:416` | LinkedIn (`linkedin`) | (b) Live-Tab Scan / (d) CLI | ❌ **NO (Blocked in Worker)** | Unattended cron scraping is explicitly prohibited. Background cron checks skip LinkedIn URLs with status `skipped`. Scanning is allowed only via live extension tab. |
+| `scrapeGoogleCareers()` | `scraper.ts:156` | Google Careers (`google`) | (b) Live-Tab Scan / (d) CLI | ❌ **NO (Blocked in Worker)** | Google `robots.txt` disallows automated crawler access. Background cron checks skip `google` URLs with status `skipped`. |
+| `scrapeAmazonJobs()` | `scraper.ts:648` | Amazon Jobs (`amazon_jobs`) | (b) Live-Tab Scan / (d) CLI | ❌ **NO (Blocked in Worker)** | Amazon Jobs `robots.txt` prohibits automated scraping. Background cron checks skip `amazon_jobs` URLs with status `skipped`. |
+| `scrapeNaukri()` | `scraper.ts:342` | Naukri (`naukri`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Scrapes public search listings. |
+| `scrapeApple()` | `scraper.ts:108` | Apple Jobs (`apple`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Scrapes public search listings. |
+| `scrapeGreenhouse()` | `scraper.ts:211` | Greenhouse (`greenhouse`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Fallback HTML scraper when public feed is unavailable. |
+| `scrapeLever()` | `scraper.ts:253` | Lever (`lever`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Fallback HTML scraper when public feed is unavailable. |
+| `scrapeWorkday()` | `scraper.ts:295` | Workday (`workday`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Fallback HTML scraper when public feed is unavailable. |
+| `scrapeAshby()` | `scraper.ts:733` | Ashby (`ashby`) | (a) Unattended Cron / (b) Live-Tab | **Yes** | Fallback HTML scraper when public feed is unavailable. |
+| `scrapeGeneric()` | `scraper.ts:817` | Generic career pages | (a) Unattended Cron / (b) Live-Tab | **Yes** | Standard HTML link & JSON-LD parser fallback. |
 | `scrapeFullJobDescription()` | `worker.ts:393` | Any Job Posting URL | (c) Resume Tailoring | ❌ **NO** | Removed from background cron worker. Executed solely on explicit user request for AI resume tailoring. |
 
 ---

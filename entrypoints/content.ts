@@ -692,11 +692,12 @@ export default defineContentScript({
       if (!hudShadow) return;
       if (hudPanel) hudPanel.remove();
 
+      const escapedCompany = escapeHtml(companyName);
       hudPanel = document.createElement('div');
       hudPanel.className = 'hud-panel';
       hudPanel.innerHTML = `
         <div class="hud-header">
-          <div class="hud-title" title="NEXTROLE · ${companyName}">NEXTROLE · ${companyName}</div>
+          <div class="hud-title" title="NEXTROLE · ${escapedCompany}">NEXTROLE · ${escapedCompany}</div>
           <button class="hud-close">&times;</button>
         </div>
         <div style="padding: 12px 12px 0 12px;">
