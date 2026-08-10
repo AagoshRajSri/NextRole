@@ -40,7 +40,7 @@ redisPublisher.on('error', (err) => {
   // Suppress unhandled error events
 });
 const monitorQueue = new Queue('monitorQueue', { connection });
-monitorQueue.on('error', (err) => {
+monitorQueue.on('error', (err: unknown) => {
   // Suppress Queue connection errors
 });
 
@@ -83,7 +83,7 @@ async function scrapeWithRetry(url: string, maxRetries = 2): Promise<ScraperResu
 }
 
 
-const worker = new Worker('monitorQueue', async (job) => {
+const worker = new Worker('monitorQueue', async (job: any) => {
   const { searchId, url } = job.data;
   console.log(`\n[Worker] Processing ${job.name || 'scrape'}: ${searchId}`);
 
@@ -254,7 +254,7 @@ const worker = new Worker('monitorQueue', async (job) => {
     const existingSnapshots = await prisma.jobSnapshot.findMany({
       where: { trackedSearchId: searchId },
     });
-    const existingIds = new Set(existingSnapshots.map(s => s.atsJobId));
+    const existingIds = new Set(existingSnapshots.map((s: any) => s.atsJobId));
     const newJobs = scrapedJobs.filter(j => !existingIds.has(j.atsJobId));
 
     console.log(`[Worker] Scraped ${scrapedJobs.length}, existing ${existingIds.size}, new ${newJobs.length}`);

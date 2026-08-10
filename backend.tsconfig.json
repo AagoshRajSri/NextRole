@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./jobtracker-backend",
+    "skipLibCheck": true,
+    "noImplicitAny": false,
+    "typeRoots": ["./node_modules/@types", "./types"]
+  },
+  "include": ["jobtracker-backend/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "tests",
+    "**/*.test.ts",
+    "entrypoints",
+    "wxt.config.ts",
+    "lib/**/*.ts",
+    "vitest.config.ts"
+  ]
+}
